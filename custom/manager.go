@@ -21,11 +21,11 @@ import (
 
 // Manager 订阅管理器
 type Manager struct {
-	storage    *storage.Storage
-	validator  *validator.Validator
-	singbox    *SingBoxProcess
-	stopCh     chan struct{}
-	refreshMu  sync.Mutex // 防止并发刷新
+	storage   *storage.Storage
+	validator *validator.Validator
+	singbox   *SingBoxProcess
+	stopCh    chan struct{}
+	refreshMu sync.Mutex // 防止并发刷新
 }
 
 // NewManager 创建订阅管理器
@@ -180,16 +180,16 @@ func (m *Manager) probeDisabled() {
 	recovered := 0
 	recoveredSubs := make(map[int64]bool)
 	for _, proxy := range disabled {
-		valid, latency, exitIP, exitLocation := m.validator.ValidateOne(proxy)
+		valid, latency, exitIP, exitLocation, ipInfo := m.validator.ValidateOne(proxy)
 		if valid {
 			// 检查地理过滤：恢复前确认不在屏蔽列表中
 			if exitLocation != "" && isGeoBlocked(exitLocation, cfg) {
 				log.Printf("[custom] 代理 %s 验证通过但被地理过滤 (%s)，保持禁用", proxy.Address, exitLocation)
-				m.storage.UpdateExitInfo(proxy.Address, exitIP, exitLocation, int(latency.Milliseconds()))
+				m.storage.UpdateExitInfo(proxy.Address, exitIP, exitLocation, int(latency.Milliseconds()), ipInfo)
 				continue
 			}
 			m.storage.EnableProxy(proxy.Address)
-			m.storage.UpdateExitInfo(proxy.Address, exitIP, exitLocation, int(latency.Milliseconds()))
+			m.storage.UpdateExitInfo(proxy.Address, exitIP, exitLocation, int(latency.Milliseconds()), ipInfo)
 			recovered++
 			recoveredSubs[proxy.SubscriptionID] = true
 			log.Printf("[custom] ✅ 代理 %s 恢复可用 (%dms)", proxy.Address, latency.Milliseconds())
@@ -469,7 +469,7 @@ func (m *Manager) validateCustomProxies(proxies []storage.Proxy, subID int64) in
 	for result := range resultCh {
 		if result.Valid {
 			latencyMs := int(result.Latency.Milliseconds())
-			m.storage.UpdateExitInfo(result.Proxy.Address, result.ExitIP, result.ExitLocation, latencyMs)
+			m.storage.UpdateExitInfo(result.Proxy.Address, result.ExitIP, result.ExitLocation, latencyMs, result.IPInfo)
 			// 检查地理过滤
 			if result.ExitLocation != "" && isGeoBlocked(result.ExitLocation, cfg) {
 				m.storage.DisableProxy(result.Proxy.Address)
@@ -500,10 +500,10 @@ func (m *Manager) GetStatus() map[string]interface{} {
 	subs, _ := m.storage.GetSubscriptions()
 
 	return map[string]interface{}{
-		"singbox_running":   m.singbox.IsRunning(),
-		"singbox_nodes":     m.singbox.GetNodeCount(),
-		"custom_count":      customCount,
-		"disabled_count":    len(disabled),
+		"singbox_running":    m.singbox.IsRunning(),
+		"singbox_nodes":      m.singbox.GetNodeCount(),
+		"custom_count":       customCount,
+		"disabled_count":     len(disabled),
 		"subscription_count": len(subs),
 	}
 }

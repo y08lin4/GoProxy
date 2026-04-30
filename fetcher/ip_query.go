@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+	"goproxy/storage"
 )
 
 // IPQueryLimiter 全局IP查询限流器
@@ -18,38 +19,104 @@ func InitIPQueryLimiter(rps int) {
 	IPQueryLimiter = rate.NewLimiter(rate.Limit(rps), rps*2)
 }
 
-// GetExitIPInfo 通过代理获取出口 IP 和地理位置（多源降级）
-func GetExitIPInfo(client *http.Client) (string, string) {
+// GetExitIPInfo 通过代理获取出口 IP、地理位置和 IPPure 风控属性（多源降级）
+func GetExitIPInfo(client *http.Client) (string, string, storage.IPInfo) {
 	// 等待限流令牌
 	if IPQueryLimiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := IPQueryLimiter.Wait(ctx); err != nil {
-			return "", ""
+			return "", "", storage.IPInfo{}
 		}
 	}
 
-	// 优先级1：ip-api.com
+	// 优先级1：IPPure（IP、位置、ASN、欺诈分、住宅/广播属性）
+	if info := tryIPPure(client); info.IPInfoAvailable && info.IP != "" {
+		return info.IP, formatIPPureLocation(info), info
+	}
+
+	// 优先级2：ip-api.com
 	if ip, loc := tryIPAPI(client); ip != "" {
-		return ip, loc
+		return ip, loc, storage.IPInfo{}
 	}
 
-	// 优先级2：ipapi.co
+	// 优先级3：ipapi.co
 	if ip, loc := tryIPAPICo(client); ip != "" {
-		return ip, loc
+		return ip, loc, storage.IPInfo{}
 	}
 
-	// 优先级3：ipinfo.io
+	// 优先级4：ipinfo.io
 	if ip, loc := tryIPInfo(client); ip != "" {
-		return ip, loc
+		return ip, loc, storage.IPInfo{}
 	}
 
-	// 优先级4：仅获取IP
+	// 优先级5：仅获取IP
 	if ip := tryHTTPBinIP(client); ip != "" {
-		return ip, "UNKNOWN"
+		return ip, "UNKNOWN", storage.IPInfo{}
 	}
 
-	return "", ""
+	return "", "", storage.IPInfo{}
+}
+
+// tryIPPure 尝试 IPPure MyIP Info API
+func tryIPPure(client *http.Client) storage.IPInfo {
+	resp, err := client.Get("https://my.ippure.com/v1/info")
+	if err != nil {
+		return storage.IPInfo{}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return storage.IPInfo{}
+	}
+
+	var result struct {
+		IP             string `json:"ip"`
+		ASN            int    `json:"asn"`
+		ASOrganization string `json:"asOrganization"`
+		Country        string `json:"country"`
+		CountryCode    string `json:"countryCode"`
+		Region         string `json:"region"`
+		RegionCode     string `json:"regionCode"`
+		City           string `json:"city"`
+		Timezone       string `json:"timezone"`
+		FraudScore     int    `json:"fraudScore"`
+		IsResidential  bool   `json:"isResidential"`
+		IsBroadcast    bool   `json:"isBroadcast"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.IP == "" {
+		return storage.IPInfo{}
+	}
+
+	return storage.IPInfo{
+		IPInfoAvailable: true,
+		IP:              result.IP,
+		ASN:             result.ASN,
+		ASOrganization:  result.ASOrganization,
+		Country:         result.Country,
+		CountryCode:     result.CountryCode,
+		Region:          result.Region,
+		RegionCode:      result.RegionCode,
+		City:            result.City,
+		Timezone:        result.Timezone,
+		FraudScore:      result.FraudScore,
+		IsResidential:   result.IsResidential,
+		IsBroadcast:     result.IsBroadcast,
+	}
+}
+
+func formatIPPureLocation(info storage.IPInfo) string {
+	location := info.CountryCode
+	if location == "" {
+		location = info.Country
+	}
+	if info.City != "" && location != "" {
+		return fmt.Sprintf("%s %s", location, info.City)
+	}
+	if location != "" {
+		return location
+	}
+	return "UNKNOWN"
 }
 
 // tryIPAPI 尝试 ip-api.com

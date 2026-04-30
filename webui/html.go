@@ -26,6 +26,12 @@ button:hover{box-shadow:0 0 25px rgba(0,255,65,0.8);transform:translateY(-1px)}
 .tip a:hover{border-bottom-color:#00ff41;text-shadow:0 0 8px #00ff41}
 .github{position:absolute;top:20px;right:20px;color:#00ff41;opacity:0.6;transition:all 0.3s}
 .github:hover{opacity:1;transform:scale(1.1);filter:drop-shadow(0 0 8px #00ff41)}
+
+
+/* Minimal white theme override */
+body{background:#f6f7fb;color:#111827;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body::before,body::after{display:none}.card{background:#fff;border:1px solid #e5e7eb;border-radius:24px;box-shadow:0 24px 70px rgba(17,24,39,.10);padding:52px;width:440px}.logo{color:#111827;text-shadow:none;font-size:44px;letter-spacing:-.04em}h1{color:#111827;text-shadow:none;letter-spacing:-.03em;text-transform:none}.sub{color:#6b7280;letter-spacing:0;text-transform:none}label{color:#6b7280;letter-spacing:.02em;text-transform:none}input[type=password]{background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:12px;font-family:inherit}input[type=password]:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.10);background:#fff}button{background:#111827;color:#fff;border:0;border-radius:12px;box-shadow:none;font-family:inherit;letter-spacing:0;text-transform:none}button:hover{background:#000;box-shadow:none;transform:translateY(-1px)}.tip{color:#6b7280;letter-spacing:0}.tip a{color:#2563eb}.tip a:hover{border-bottom-color:#2563eb;text-shadow:none}.github{color:#111827}.github:hover{filter:none}.error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:12px;box-shadow:none;letter-spacing:0;text-transform:none}
+
 </style>
 </head>
 <body>
@@ -75,6 +81,12 @@ button:hover{box-shadow:0 0 25px rgba(0,255,65,0.8);transform:translateY(-1px)}
 .tip a:hover{border-bottom-color:#00ff41;text-shadow:0 0 8px #00ff41}
 .github{position:absolute;top:20px;right:20px;color:#00ff41;opacity:0.6;transition:all 0.3s}
 .github:hover{opacity:1;transform:scale(1.1);filter:drop-shadow(0 0 8px #00ff41)}
+
+
+/* Minimal white theme override */
+body{background:#f6f7fb;color:#111827;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body::before,body::after{display:none}.card{background:#fff;border:1px solid #e5e7eb;border-radius:24px;box-shadow:0 24px 70px rgba(17,24,39,.10);padding:52px;width:440px}.logo{color:#111827;text-shadow:none;font-size:44px;letter-spacing:-.04em}h1{color:#111827;text-shadow:none;letter-spacing:-.03em;text-transform:none}.sub{color:#6b7280;letter-spacing:0;text-transform:none}label{color:#6b7280;letter-spacing:.02em;text-transform:none}input[type=password]{background:#fff;border:1px solid #d1d5db;color:#111827;border-radius:12px;font-family:inherit}input[type=password]:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.10);background:#fff}button{background:#111827;color:#fff;border:0;border-radius:12px;box-shadow:none;font-family:inherit;letter-spacing:0;text-transform:none}button:hover{background:#000;box-shadow:none;transform:translateY(-1px)}.tip{color:#6b7280;letter-spacing:0}.tip a{color:#2563eb}.tip a:hover{border-bottom-color:#2563eb;text-shadow:none}.github{color:#111827}.github:hover{filter:none}.error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:12px;box-shadow:none;letter-spacing:0;text-transform:none}
+
 </style>
 </head>
 <body>

@@ -70,6 +70,7 @@ func (o *Optimizer) RunOnce() {
 					Protocol:     result.Proxy.Protocol,
 					ExitIP:       result.ExitIP,
 					ExitLocation: result.ExitLocation,
+					IPInfo:       result.IPInfo,
 					Latency:      latencyMs,
 				})
 			}

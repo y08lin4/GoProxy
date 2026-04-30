@@ -74,17 +74,29 @@ vim .env  # 修改密码、认证、地理过滤等
 docker compose up -d
 ```
 
+### Windows 一键启动
+
+双击运行：
+
+```text
+start-windows.bat
+```
+
+脚本会自动读取 Windows 系统代理、执行 `go mod download` 补全依赖、编译 `.bin/proxygo.exe`、启动 WebUI，并打开浏览器访问 `http://localhost:7778`。
+
+详细说明见 [WINDOWS_START.md](WINDOWS_START.md)。
+
 ### 本地运行
 
 ```bash
-# 需要 Go 1.25 + CGO（依赖 go-sqlite3）
+# 纯 Go SQLite 驱动，无需额外安装 GCC / MinGW / CGO 工具链
 go run .
 
 # 或编译后运行
 go build -o proxygo . && ./proxygo
 ```
 
-> 如需订阅导入功能，本地需安装 [sing-box](https://sing-box.sagernet.org/)：`brew install sing-box`
+> 如需订阅导入功能，本地需安装 [sing-box](https://sing-box.sagernet.org/) 并确保 `SINGBOX_PATH` 可执行。
 
 ## 使用代理
 

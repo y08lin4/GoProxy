@@ -198,6 +198,37 @@ tr:hover{background:var(--gray-2);box-shadow:inset 0 0 20px rgba(0,255,65,0.05)}
 /* Toast 提示 */
 .toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--fg);color:#000;padding:12px 24px;font-size:11px;font-weight:600;font-family:var(--mono);opacity:0;transition:all 0.3s;z-index:1000;pointer-events:none;box-shadow:0 0 20px var(--fg);text-transform:uppercase;letter-spacing:0.05em}
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+
+
+/* Minimal white theme override */
+:root{
+  --bg:#f6f7fb;--bg-elevated:#ffffff;--bg-card:#ffffff;--fg:#111827;--fg-dim:#4b5563;--fg-text:#111827;
+  --border:#e5e7eb;--border-heavy:#d1d5db;--gray-1:#f9fafb;--gray-2:#f3f4f6;--gray-3:#e5e7eb;
+  --gray-4:#d1d5db;--gray-5:#6b7280;--gray-6:#374151;--green:#16a34a;--yellow:#f59e0b;--orange:#ea580c;--red:#dc2626;
+  --mono:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);letter-spacing:0}
+body::before,body::after{display:none}
+.layout{max-width:1680px;padding:0 28px 40px}
+.content-grid{gap:24px}
+.sidebar{top:24px}
+.proxy-header{background:rgba(246,247,251,.9);border-bottom:1px solid var(--border);box-shadow:none;backdrop-filter:blur(14px)}
+.proxy-logo{color:#111827;text-shadow:none;animation:none;letter-spacing:-.03em;text-transform:none;font-size:28px}
+.user-badge{color:#6b7280;letter-spacing:.02em;opacity:1}
+.control-panel,.health-grid,.quality-bar,.logs,.subscriptions-panel{background:#fff;border:1px solid var(--border);border-radius:18px;box-shadow:0 12px 36px rgba(17,24,39,.06)}
+.control-header{border-bottom:1px solid var(--border);justify-content:flex-start}.control-title{color:#111827;text-shadow:none;letter-spacing:.02em;text-transform:none}
+.tab,.filter-select,.ctrl-btn-primary,.ctrl-btn-secondary,.btn-action{background:#fff;color:#374151;border:1px solid var(--border);border-radius:10px;text-transform:none;letter-spacing:0;box-shadow:none}
+.tab:hover,.filter-select:hover,.ctrl-btn-primary:hover,.ctrl-btn-secondary:hover,.btn-action:hover{background:#f9fafb;color:#111827;box-shadow:none;text-shadow:none}
+.btn-danger{background:#fff;color:var(--red);border:1px solid #fecaca;border-radius:10px;text-transform:none;letter-spacing:0}.btn-danger:hover{background:#fef2f2;color:#b91c1c;box-shadow:none}
+.health-grid{gap:10px;background:transparent;border:0;box-shadow:none}.health-card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:14px}.health-label{color:#6b7280;letter-spacing:.04em}.health-value{color:#111827;text-shadow:none}
+.quality-bar-title,.quality-legend-item{color:#6b7280}.quality-visual{border:0;border-radius:999px;background:#f3f4f6;box-shadow:none}.quality-segment{box-shadow:none;color:#111827}
+table{background:#fff;border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 14px 40px rgba(17,24,39,.06);font-family:var(--sans)}
+thead{background:#f9fafb;border-bottom:1px solid var(--border);box-shadow:none}th{color:#6b7280;letter-spacing:.04em}td{color:#374151;border-bottom:1px solid #eef2f7}tr:hover{background:#fafafa;box-shadow:none}
+.cell-mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace}.cell-grade{text-shadow:none}.grade-s{color:#16a34a;text-shadow:none}.grade-a{color:#ca8a04;text-shadow:none}.grade-b{color:#ea580c;text-shadow:none}.grade-c{color:#dc2626;text-shadow:none}
+.badge{border-radius:999px;border:1px solid var(--border);letter-spacing:0}.badge-http{color:#2563eb;background:#eff6ff;border-color:#bfdbfe}.badge-socks5{color:#7c3aed;background:#f5f3ff;border-color:#ddd6fe;box-shadow:none}
+.ip-cell{min-width:140px}.ip-main{font-weight:700;color:#111827}.ip-sub{margin-top:2px;color:#6b7280;font-size:10px}.muted{color:#9ca3af}.ip-attributes{display:flex;flex-direction:column;gap:4px;max-width:240px}.attr-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.attr-pill{display:inline-flex;align-items:center;border-radius:999px;border:1px solid #d1d5db;background:#f9fafb;color:#374151;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap}.attr-pill.residential{background:#ecfdf5;color:#047857;border-color:#bbf7d0}.attr-pill.datacenter{background:#f3f4f6;color:#4b5563;border-color:#e5e7eb}.attr-pill.broadcast{background:#fff7ed;color:#c2410c;border-color:#fed7aa}.attr-pill.asn{background:#eef2ff;color:#4338ca;border-color:#c7d2fe}.attr-org{font-size:10px;color:#6b7280;line-height:1.35;word-break:break-word}.risk-score{display:inline-flex;align-items:center;justify-content:center;min-width:46px;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800}.risk-low{background:#ecfdf5;color:#047857}.risk-mid{background:#fffbeb;color:#b45309}.risk-high{background:#fef2f2;color:#b91c1c}
+.modal-overlay{background:rgba(17,24,39,.45)}.modal{background:#fff;border:1px solid var(--border);border-radius:22px;box-shadow:0 24px 70px rgba(17,24,39,.18)}.modal-title{color:#111827;text-shadow:none;text-transform:none;letter-spacing:0}.toast{background:#111827;color:#fff;border:0;border-radius:999px;box-shadow:0 16px 40px rgba(17,24,39,.18);text-transform:none;letter-spacing:0}
+
 </style>
 </head>
 <body>
@@ -591,6 +622,14 @@ const i18n = {
     'proxy.th_protocol': '协议',
     'proxy.th_address': '地址',
     'proxy.th_exit_ip': '出口IP',
+    'proxy.th_residential': '住宅',
+    'proxy.th_fraud': '欺诈评分',
+    'proxy.th_ip_attr': 'IP属性',
+    'ip.residential': '住宅',
+    'ip.non_residential': '非住宅',
+    'ip.broadcast': '广播',
+    'ip.not_broadcast': '非广播',
+    'ip.unknown': '未知',
     'proxy.th_location': '位置',
     'proxy.th_latency': '延迟',
     'proxy.th_usage': '使用统计',
@@ -746,6 +785,14 @@ const i18n = {
     'proxy.th_protocol': 'Protocol',
     'proxy.th_address': 'Address',
     'proxy.th_exit_ip': 'Exit IP',
+    'proxy.th_residential': 'Residential',
+    'proxy.th_fraud': 'Fraud Score',
+    'proxy.th_ip_attr': 'IP Attributes',
+    'ip.residential': 'Residential',
+    'ip.non_residential': 'Non-residential',
+    'ip.broadcast': 'Broadcast',
+    'ip.not_broadcast': 'Non-broadcast',
+    'ip.unknown': 'Unknown',
     'proxy.th_location': 'Location',
     'proxy.th_latency': 'Latency',
     'proxy.th_usage': 'Usage',
@@ -997,7 +1044,11 @@ function copyToClipboard(text) {
 }
 
 async function refreshProxy(address) {
-  const res = await api('/api/proxy/refresh', { address });
+  const res = await api('/api/proxy/refresh', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({address})
+  });
   if (res) {
     showToast(t('proxy.refresh_started'));
     setTimeout(() => loadProxies(currentFilter), 2000);
@@ -1088,7 +1139,7 @@ function updateCountryOptions() {
 function filterAndRender() {
   let filtered = allProxies;
   if (currentCountry) {
-    filtered = filtered.filter(p => p.exit_location && p.exit_location.startsWith(currentCountry + ' '));
+    filtered = filtered.filter(p => p.exit_location && (p.exit_location === currentCountry || p.exit_location.startsWith(currentCountry + ' ')));
   }
   renderProxies(filtered);
 }
@@ -1103,6 +1154,42 @@ function setCountryFilter(country) {
   filterAndRender();
 }
 
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function riskClass(score) {
+  if (score >= 70) return 'risk-high';
+  if (score >= 40) return 'risk-mid';
+  return 'risk-low';
+}
+
+function renderResidential(p) {
+  if (!p.ip_info_available) return '<span class="muted">—</span>';
+  const key = p.is_residential ? 'ip.residential' : 'ip.non_residential';
+  const cls = p.is_residential ? 'residential' : 'datacenter';
+  return '<span class="attr-pill ' + cls + '">' + t(key) + '</span>';
+}
+
+function renderFraudScore(p) {
+  if (!p.ip_info_available && !p.fraud_score) return '<span class="muted">—</span>';
+  const score = Number(p.fraud_score || 0);
+  return '<span class="risk-score ' + riskClass(score) + '">' + score + '</span>';
+}
+
+function renderIPAttributes(p) {
+  if (!p.ip_info_available) return '<span class="muted">—</span>';
+  let html = '<div class="ip-attributes"><div class="attr-row">';
+  if (p.asn) html += '<span class="attr-pill asn">AS' + escapeHtml(p.asn) + '</span>';
+  html += '<span class="attr-pill ' + (p.is_broadcast ? 'broadcast' : 'datacenter') + '">' + t(p.is_broadcast ? 'ip.broadcast' : 'ip.not_broadcast') + '</span>';
+  if (p.timezone) html += '<span class="attr-pill">' + escapeHtml(p.timezone) + '</span>';
+  html += '</div>';
+  if (p.as_organization) html += '<div class="attr-org">' + escapeHtml(p.as_organization) + '</div>';
+  html += '</div>';
+  return html;
+}
+
 function renderProxies(proxies) {
   let html = '';
   if (proxies.length === 0) {
@@ -1113,6 +1200,9 @@ function renderProxies(proxies) {
     html += '<th data-i18n="proxy.th_protocol">' + t('proxy.th_protocol') + '</th>';
     html += '<th data-i18n="proxy.th_address">' + t('proxy.th_address') + '</th>';
     html += '<th data-i18n="proxy.th_exit_ip">' + t('proxy.th_exit_ip') + '</th>';
+    html += '<th data-i18n="proxy.th_residential">' + t('proxy.th_residential') + '</th>';
+    html += '<th data-i18n="proxy.th_fraud">' + t('proxy.th_fraud') + '</th>';
+    html += '<th data-i18n="proxy.th_ip_attr">' + t('proxy.th_ip_attr') + '</th>';
     html += '<th data-i18n="proxy.th_location">' + t('proxy.th_location') + '</th>';
     html += '<th data-i18n="proxy.th_latency">' + t('proxy.th_latency') + '</th>';
     html += '<th data-i18n="proxy.th_usage">' + t('proxy.th_usage') + '</th>';
@@ -1136,8 +1226,11 @@ function renderProxies(proxies) {
       }
       html += '</td>';
       html += '<td class="cell-mono cell-clickable" onclick="copyToClipboard(\'' + p.address + '\')" title="Copy">' + p.address + '</td>';
-      html += '<td class="cell-mono">' + (p.exit_ip || '—') + '</td>';
-      html += '<td>' + flag + ' ' + (p.exit_location || '—') + '</td>';
+      html += '<td class="cell-mono ip-cell"><div class="ip-main">' + escapeHtml(p.exit_ip || '—') + '</div>' + (p.country ? '<div class="ip-sub">' + escapeHtml(p.country) + '</div>' : '') + '</td>';
+      html += '<td>' + renderResidential(p) + '</td>';
+      html += '<td>' + renderFraudScore(p) + '</td>';
+      html += '<td>' + renderIPAttributes(p) + '</td>';
+      html += '<td>' + flag + ' ' + escapeHtml(p.exit_location || '—') + '</td>';
       html += '<td class="cell-mono ' + latencyClass + '">' + (p.latency > 0 ? p.latency + 'ms' : '—') + '</td>';
       html += '<td class="cell-mono">' + (p.use_count || 0) + ' / ' + (p.success_count || 0) + '</td>';
       

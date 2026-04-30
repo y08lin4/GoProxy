@@ -8,26 +8,44 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type Proxy struct {
-	ID           int64     `json:"id"`
-	Address      string    `json:"address"`
-	Protocol     string    `json:"protocol"`
-	ExitIP       string    `json:"exit_ip"`
-	ExitLocation string    `json:"exit_location"`
-	Latency      int       `json:"latency"`
-	QualityGrade string    `json:"quality_grade"`
-	UseCount     int       `json:"use_count"`
-	SuccessCount int       `json:"success_count"`
-	FailCount    int       `json:"fail_count"`
-	LastUsed     time.Time `json:"last_used"`
-	LastCheck    time.Time `json:"last_check"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           int64  `json:"id"`
+	Address      string `json:"address"`
+	Protocol     string `json:"protocol"`
+	ExitIP       string `json:"exit_ip"`
+	ExitLocation string `json:"exit_location"`
+	IPInfo
+	Latency        int       `json:"latency"`
+	QualityGrade   string    `json:"quality_grade"`
+	UseCount       int       `json:"use_count"`
+	SuccessCount   int       `json:"success_count"`
+	FailCount      int       `json:"fail_count"`
+	LastUsed       time.Time `json:"last_used"`
+	LastCheck      time.Time `json:"last_check"`
+	CreatedAt      time.Time `json:"created_at"`
 	Status         string    `json:"status"`
 	Source         string    `json:"source"`          // "free" 或 "custom"
-	SubscriptionID int64    `json:"subscription_id"` // 所属订阅ID（0=免费代理）
+	SubscriptionID int64     `json:"subscription_id"` // 所属订阅ID（0=免费代理）
+}
+
+// IPInfo 保存 IPPure 返回的出口 IP 画像信息。
+type IPInfo struct {
+	IPInfoAvailable bool   `json:"ip_info_available"`
+	IP              string `json:"ip"`
+	ASN             int    `json:"asn"`
+	ASOrganization  string `json:"as_organization"`
+	Country         string `json:"country"`
+	CountryCode     string `json:"country_code"`
+	Region          string `json:"region"`
+	RegionCode      string `json:"region_code"`
+	City            string `json:"city"`
+	Timezone        string `json:"timezone"`
+	FraudScore      int    `json:"fraud_score"`
+	IsResidential   bool   `json:"is_residential"`
+	IsBroadcast     bool   `json:"is_broadcast"`
 }
 
 // Subscription 订阅信息
@@ -55,7 +73,7 @@ type SourceStatus struct {
 	ConsecutiveFails int
 	LastSuccess      time.Time
 	LastFail         time.Time
-	Status           string    // active/degraded/disabled
+	Status           string // active/degraded/disabled
 	DisabledUntil    time.Time
 }
 
@@ -64,7 +82,7 @@ type Storage struct {
 }
 
 func New(dbPath string) (*Storage, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -87,6 +105,19 @@ func (s *Storage) initSchema() error {
 			protocol       TEXT NOT NULL,
 			exit_ip        TEXT NOT NULL DEFAULT '',
 			exit_location  TEXT NOT NULL DEFAULT '',
+			ip_info_available INTEGER NOT NULL DEFAULT 0,
+			ip             TEXT NOT NULL DEFAULT '',
+			asn            INTEGER NOT NULL DEFAULT 0,
+			as_organization TEXT NOT NULL DEFAULT '',
+			country        TEXT NOT NULL DEFAULT '',
+			country_code   TEXT NOT NULL DEFAULT '',
+			region         TEXT NOT NULL DEFAULT '',
+			region_code    TEXT NOT NULL DEFAULT '',
+			city           TEXT NOT NULL DEFAULT '',
+			timezone       TEXT NOT NULL DEFAULT '',
+			fraud_score    INTEGER NOT NULL DEFAULT 0,
+			is_residential INTEGER NOT NULL DEFAULT 0,
+			is_broadcast   INTEGER NOT NULL DEFAULT 0,
 			latency        INTEGER NOT NULL DEFAULT 0,
 			quality_grade  TEXT NOT NULL DEFAULT 'C',
 			use_count      INTEGER NOT NULL DEFAULT 0,
@@ -208,6 +239,31 @@ func (s *Storage) initSchema() error {
 		s.db.Exec(`ALTER TABLE proxies ADD COLUMN subscription_id INTEGER NOT NULL DEFAULT 0`)
 	}
 
+	// 迁移：添加 IPPure IP 画像字段
+	ipInfoColumns := []struct {
+		name string
+		def  string
+	}{
+		{"ip_info_available", "INTEGER NOT NULL DEFAULT 0"},
+		{"ip", "TEXT NOT NULL DEFAULT ''"},
+		{"asn", "INTEGER NOT NULL DEFAULT 0"},
+		{"as_organization", "TEXT NOT NULL DEFAULT ''"},
+		{"country", "TEXT NOT NULL DEFAULT ''"},
+		{"country_code", "TEXT NOT NULL DEFAULT ''"},
+		{"region", "TEXT NOT NULL DEFAULT ''"},
+		{"region_code", "TEXT NOT NULL DEFAULT ''"},
+		{"city", "TEXT NOT NULL DEFAULT ''"},
+		{"timezone", "TEXT NOT NULL DEFAULT ''"},
+		{"fraud_score", "INTEGER NOT NULL DEFAULT 0"},
+		{"is_residential", "INTEGER NOT NULL DEFAULT 0"},
+		{"is_broadcast", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, col := range ipInfoColumns {
+		if err := s.ensureProxyColumn(col.name, col.def); err != nil {
+			return err
+		}
+	}
+
 	// 创建订阅表
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS subscriptions (
@@ -242,6 +298,19 @@ func (s *Storage) initSchema() error {
 	return nil
 }
 
+func (s *Storage) ensureProxyColumn(name, definition string) error {
+	var exists int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('proxies') WHERE name=?`, name).Scan(&exists)
+	if err != nil || exists > 0 {
+		return err
+	}
+	log.Printf("[storage] migrating: adding %s column", name)
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE proxies ADD COLUMN %s %s`, name, definition)); err != nil {
+		return fmt.Errorf("migrate %s column: %w", name, err)
+	}
+	return nil
+}
+
 // AddProxy 新增免费代理，已存在则忽略
 func (s *Storage) AddProxy(address, protocol string) error {
 	result, err := s.db.Exec(
@@ -252,7 +321,7 @@ func (s *Storage) AddProxy(address, protocol string) error {
 		log.Printf("[storage] AddProxy %s error: %v", address, err)
 		return err
 	}
-	
+
 	// 检查是否真的插入了
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
@@ -285,7 +354,7 @@ func (s *Storage) AddProxies(proxies []Proxy) error {
 // GetRandom 随机取一个可用代理（优先选择质量高的）
 func (s *Storage) GetRandom() (*Proxy, error) {
 	rows, err := s.db.Query(
-		`SELECT `+proxyColumns+`
+		`SELECT ` + proxyColumns + `
 		 FROM proxies
 		 WHERE status = 'active' AND fail_count < 3
 		 ORDER BY
@@ -310,8 +379,11 @@ func (s *Storage) GetRandom() (*Proxy, error) {
 }
 
 // proxyColumns 代理表查询的标准列列表
-const proxyColumns = `id, address, protocol, exit_ip, exit_location, latency, quality_grade,
-	use_count, success_count, fail_count, last_used, last_check, created_at, status, source, subscription_id`
+const proxyColumns = `id, address, protocol, exit_ip, exit_location,
+	ip_info_available, ip, asn, as_organization, country, country_code, region, region_code,
+	city, timezone, fraud_score, is_residential, is_broadcast,
+	latency, quality_grade, use_count, success_count, fail_count, last_used, last_check,
+	created_at, status, source, subscription_id`
 
 // scanProxy 扫描代理行数据
 func scanProxy(rows *sql.Rows) (*Proxy, error) {
@@ -319,11 +391,17 @@ func scanProxy(rows *sql.Rows) (*Proxy, error) {
 	var lastUsed, lastCheck sql.NullTime
 	var source sql.NullString
 	var subID sql.NullInt64
+	var ipInfoAvailable, isResidential, isBroadcast int
 	if err := rows.Scan(&p.ID, &p.Address, &p.Protocol, &p.ExitIP, &p.ExitLocation,
-		&p.Latency, &p.QualityGrade, &p.UseCount, &p.SuccessCount, &p.FailCount,
-		&lastUsed, &lastCheck, &p.CreatedAt, &p.Status, &source, &subID); err != nil {
+		&ipInfoAvailable, &p.IP, &p.ASN, &p.ASOrganization, &p.Country, &p.CountryCode,
+		&p.Region, &p.RegionCode, &p.City, &p.Timezone, &p.FraudScore, &isResidential,
+		&isBroadcast, &p.Latency, &p.QualityGrade, &p.UseCount, &p.SuccessCount,
+		&p.FailCount, &lastUsed, &lastCheck, &p.CreatedAt, &p.Status, &source, &subID); err != nil {
 		return nil, err
 	}
+	p.IPInfoAvailable = ipInfoAvailable == 1
+	p.IsResidential = isResidential == 1
+	p.IsBroadcast = isBroadcast == 1
 	if lastUsed.Valid {
 		p.LastUsed = lastUsed.Time
 	}
@@ -531,13 +609,41 @@ func (s *Storage) UpdateLatency(address string, latencyMs int) error {
 }
 
 // UpdateExitInfo 更新代理的出口 IP、位置和质量等级
-func (s *Storage) UpdateExitInfo(address, exitIP, exitLocation string, latencyMs int) error {
+func (s *Storage) UpdateExitInfo(address, exitIP, exitLocation string, latencyMs int, ipInfos ...IPInfo) error {
 	grade := CalculateQualityGrade(latencyMs)
+	if len(ipInfos) > 0 && ipInfos[0].IPInfoAvailable {
+		info := ipInfos[0]
+		if info.IP == "" {
+			info.IP = exitIP
+		}
+		_, err := s.db.Exec(
+			`UPDATE proxies SET
+			 exit_ip = ?, exit_location = ?, ip_info_available = 1, ip = ?, asn = ?, as_organization = ?,
+			 country = ?, country_code = ?, region = ?, region_code = ?, city = ?, timezone = ?,
+			 fraud_score = ?, is_residential = ?, is_broadcast = ?, latency = ?, quality_grade = ?
+			 WHERE address = ?`,
+			exitIP, exitLocation, info.IP, info.ASN, info.ASOrganization, info.Country, info.CountryCode,
+			info.Region, info.RegionCode, info.City, info.Timezone, info.FraudScore,
+			boolToInt(info.IsResidential), boolToInt(info.IsBroadcast), latencyMs, grade, address,
+		)
+		return err
+	}
 	_, err := s.db.Exec(
-		`UPDATE proxies SET exit_ip = ?, exit_location = ?, latency = ?, quality_grade = ? WHERE address = ?`,
+		`UPDATE proxies SET
+		 exit_ip = ?, exit_location = ?, ip_info_available = 0, ip = '', asn = 0, as_organization = '',
+		 country = '', country_code = '', region = '', region_code = '', city = '', timezone = '',
+		 fraud_score = 0, is_residential = 0, is_broadcast = 0, latency = ?, quality_grade = ?
+		 WHERE address = ?`,
 		exitIP, exitLocation, latencyMs, grade, address,
 	)
 	return err
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // RecordProxyUse 记录代理使用（成功）
@@ -606,9 +712,18 @@ func (s *Storage) ReplaceProxy(oldAddress string, newProxy Proxy) error {
 		source = "free"
 	}
 	_, err = tx.Exec(
-		`INSERT INTO proxies (address, protocol, exit_ip, exit_location, latency, quality_grade, status, source)
-		 VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
-		newProxy.Address, newProxy.Protocol, newProxy.ExitIP, newProxy.ExitLocation, newProxy.Latency, grade, source,
+		`INSERT INTO proxies (
+			address, protocol, exit_ip, exit_location,
+			ip_info_available, ip, asn, as_organization, country, country_code, region, region_code,
+			city, timezone, fraud_score, is_residential, is_broadcast,
+			latency, quality_grade, status, source
+		 )
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+		newProxy.Address, newProxy.Protocol, newProxy.ExitIP, newProxy.ExitLocation,
+		boolToInt(newProxy.IPInfoAvailable), newProxy.IP, newProxy.ASN, newProxy.ASOrganization,
+		newProxy.Country, newProxy.CountryCode, newProxy.Region, newProxy.RegionCode,
+		newProxy.City, newProxy.Timezone, newProxy.FraudScore, boolToInt(newProxy.IsResidential),
+		boolToInt(newProxy.IsBroadcast), newProxy.Latency, grade, source,
 	)
 	if err != nil {
 		return err
@@ -933,7 +1048,7 @@ func (s *Storage) EnableProxy(address string) error {
 // GetDisabledCustomProxies 获取所有被禁用的订阅代理
 func (s *Storage) GetDisabledCustomProxies() ([]Proxy, error) {
 	rows, err := s.db.Query(
-		`SELECT `+proxyColumns+`
+		`SELECT ` + proxyColumns + `
 		 FROM proxies
 		 WHERE source = 'custom' AND status = 'disabled'`,
 	)
@@ -1096,7 +1211,7 @@ func (s *Storage) GetSubscriptions() ([]Subscription, error) {
 // GetSubscription 获取单个订阅
 func (s *Storage) GetSubscription(id int64) (*Subscription, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + subColumns + `
+		`SELECT `+subColumns+`
 		 FROM subscriptions WHERE id = ?`, id,
 	)
 	if err != nil {

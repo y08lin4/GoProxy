@@ -1,7 +1,6 @@
 package validator
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +11,7 @@ import (
 
 	"golang.org/x/net/proxy"
 	"goproxy/config"
+	"goproxy/fetcher"
 	"goproxy/storage"
 )
 
@@ -51,36 +51,7 @@ type Result struct {
 	Latency      time.Duration
 	ExitIP       string
 	ExitLocation string
-}
-
-// getExitIPInfo 通过代理获取出口 IP 和地理位置
-func getExitIPInfo(client *http.Client) (string, string) {
-	// 使用 ip-api.com 返回 JSON 格式的 IP 信息
-	resp, err := client.Get("http://ip-api.com/json/?fields=status,country,countryCode,city,query")
-	if err != nil {
-		return "", ""
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Status      string `json:"status"`
-		Query       string `json:"query"`       // IP 地址
-		Country     string `json:"country"`
-		CountryCode string `json:"countryCode"`
-		City        string `json:"city"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.Status != "success" {
-		return "", ""
-	}
-
-	// 返回格式：IP, "国家代码 城市"
-	location := result.CountryCode
-	if result.City != "" {
-		location = fmt.Sprintf("%s %s", result.CountryCode, result.City)
-	}
-	
-	return result.Query, location
+	IPInfo       storage.IPInfo
 }
 
 // HTTPS 测试目标列表，随机选一个验证代理的 CONNECT 隧道能力
@@ -151,8 +122,8 @@ func (v *Validator) ValidateStream(proxies []storage.Proxy) <-chan Result {
 			go func(px storage.Proxy) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				valid, latency, exitIP, exitLocation := v.ValidateOne(px)
-				ch <- Result{Proxy: px, Valid: valid, Latency: latency, ExitIP: exitIP, ExitLocation: exitLocation}
+				valid, latency, exitIP, exitLocation, ipInfo := v.ValidateOne(px)
+				ch <- Result{Proxy: px, Valid: valid, Latency: latency, ExitIP: exitIP, ExitLocation: exitLocation, IPInfo: ipInfo}
 			}(p)
 		}
 		wg.Wait()
@@ -162,8 +133,8 @@ func (v *Validator) ValidateStream(proxies []storage.Proxy) <-chan Result {
 	return ch
 }
 
-// ValidateOne 验证单个代理是否可用，返回是否有效、延迟、出口IP和地理位置
-func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, string) {
+// ValidateOne 验证单个代理是否可用，返回是否有效、延迟、出口IP、地理位置和 IPPure 画像
+func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, string, storage.IPInfo) {
 	var client *http.Client
 	var err error
 
@@ -174,40 +145,40 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 		client, err = newSOCKS5Client(p.Address, v.timeout)
 	default:
 		log.Printf("unknown protocol %s for %s", p.Protocol, p.Address)
-		return false, 0, "", ""
+		return false, 0, "", "", storage.IPInfo{}
 	}
 
 	if err != nil {
-		return false, 0, "", ""
+		return false, 0, "", "", storage.IPInfo{}
 	}
 
 	start := time.Now()
 	resp, err := client.Get(v.validateURL)
 	latency := time.Since(start)
 	if err != nil {
-		return false, 0, "", ""
+		return false, 0, "", "", storage.IPInfo{}
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
 	// 验证状态码（200 或 204 都接受）
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return false, latency, "", ""
+		return false, latency, "", "", storage.IPInfo{}
 	}
 
 	// 响应时间过滤
 	if v.maxResponseMs > 0 && latency > time.Duration(v.maxResponseMs)*time.Millisecond {
-		return false, latency, "", ""
+		return false, latency, "", "", storage.IPInfo{}
 	}
 
-	// 获取出口 IP 和地理位置（仅在验证通过时）
-	exitIP, exitLocation := getExitIPInfo(client)
-	
+	// 获取出口 IP、地理位置和 IPPure 画像（仅在验证通过时）
+	exitIP, exitLocation, ipInfo := fetcher.GetExitIPInfo(client)
+
 	// 必须能获取到出口信息
 	if exitIP == "" || exitLocation == "" {
-		return false, latency, exitIP, exitLocation
+		return false, latency, exitIP, exitLocation, ipInfo
 	}
-	
+
 	// 地理过滤：白名单优先，否则走黑名单
 	if v.cfg != nil && len(exitLocation) >= 2 {
 		countryCode := exitLocation[:2]
@@ -221,13 +192,13 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 				}
 			}
 			if !allowed {
-				return false, latency, exitIP, exitLocation
+				return false, latency, exitIP, exitLocation, ipInfo
 			}
 		} else if len(v.cfg.BlockedCountries) > 0 {
 			// 黑名单模式
 			for _, blocked := range v.cfg.BlockedCountries {
 				if countryCode == blocked {
-					return false, latency, exitIP, exitLocation
+					return false, latency, exitIP, exitLocation, ipInfo
 				}
 			}
 		}
@@ -236,11 +207,11 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 	// HTTP 代理额外检测：必须支持 HTTPS CONNECT 隧道
 	if p.Protocol == "http" {
 		if !checkHTTPSConnect(p.Address, v.timeout) {
-			return false, latency, exitIP, exitLocation
+			return false, latency, exitIP, exitLocation, ipInfo
 		}
 	}
 
-	return true, latency, exitIP, exitLocation
+	return true, latency, exitIP, exitLocation, ipInfo
 }
 
 func newHTTPClient(address string, timeout time.Duration) (*http.Client, error) {
