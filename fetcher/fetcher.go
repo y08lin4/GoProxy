@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,13 @@ var fastUpdateSources = []Source{
 	{"https://cdn.jsdelivr.net/gh/sunny9577/proxy-scraper/generated/http_proxies.txt", "http"},
 	{"https://cdn.jsdelivr.net/gh/sunny9577/proxy-scraper/generated/socks5_proxies.txt", "socks5"},
 	{"https://cdn.jsdelivr.net/gh/sunny9577/proxy-scraper/generated/socks4_proxies.txt", "socks5"},
+	// Proxyfind 参考源：ProxyScrape API / OpenProxyList / Proxifly（更新快、纯文本）
+	{"https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", "http"},
+	{"https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all", "socks5"},
+	{"https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt", "http"},
+	{"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5"},
+	{"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt", "http"},
+	{"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt", "socks5"},
 }
 
 // 慢速更新源（每天更新）- 用于优化轮换模式
@@ -67,6 +75,16 @@ var slowUpdateSources = []Source{
 	// proxy4parsing
 	{"https://cdn.jsdelivr.net/gh/proxy4parsing/proxy-list/http.txt", "http"},
 	{"https://cdn.jsdelivr.net/gh/proxy4parsing/proxy-list/socks5.txt", "socks5"},
+	// Proxyfind 参考源：mmpx12 / clarketm / rdavydov / 其他 GitHub 文本源
+	{"https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt", "http"},
+	{"https://raw.githubusercontent.com/mmpx12/proxy-list/master/https.txt", "http"},
+	{"https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt", "socks5"},
+	{"https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt", "http"},
+	{"https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt", "http"},
+	{"https://raw.githubusercontent.com/hendrikbgr/Free-Proxy-Repo/master/proxy_list.txt", "http"},
+	{"https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/free.txt", "http"},
+	{"https://cdn.jsdelivr.net/gh/ALIILAPRO/Proxy/socks5.txt", "socks5"},
+	{"https://cdn.jsdelivr.net/gh/Zaeem20/FREE_PROXIES_LIST/socks5.txt", "socks5"},
 }
 
 // 所有源
@@ -251,7 +269,14 @@ func (f *Fetcher) Fetch() ([]storage.Proxy, error) {
 }
 
 func (f *Fetcher) fetchFromURL(url, protocol string) ([]storage.Proxy, error) {
-	resp, err := f.client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("new request %s: %w", url, err)
+	}
+	req.Header.Set("User-Agent", "GoProxy/1.0 (+https://github.com/isboyjc/GoProxy)")
+	req.Header.Set("Accept", "text/plain,*/*")
+
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("get %s: %w", url, err)
 	}
@@ -266,25 +291,26 @@ func (f *Fetcher) fetchFromURL(url, protocol string) ([]storage.Proxy, error) {
 
 func parseProxyList(r io.Reader, protocol string) ([]storage.Proxy, error) {
 	var proxies []storage.Proxy
+	defaultProtocol := normalizeProtocol(protocol)
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		addr := line
-		proto := protocol
-		// 支持 protocol://host:port 格式
+		proto := defaultProtocol
+		// Support protocol://host:port lines.
 		if idx := strings.Index(line, "://"); idx != -1 {
-			proto = line[:idx]
+			proto = normalizeProtocol(line[:idx])
 			addr = line[idx+3:]
-			// socks4 当 socks5 处理
-			if proto == "socks4" {
-				proto = "socks5"
-			}
 		}
-		parts := strings.Split(addr, ":")
-		if len(parts) != 2 {
+		if proto != "http" && proto != "socks5" {
+			continue
+		}
+		addr, ok := normalizeProxyAddress(addr)
+		if !ok {
 			continue
 		}
 		proxies = append(proxies, storage.Proxy{
@@ -293,4 +319,38 @@ func parseProxyList(r io.Reader, protocol string) ([]storage.Proxy, error) {
 		})
 	}
 	return proxies, scanner.Err()
+}
+
+func normalizeProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "http", "https":
+		// Public "HTTPS" lists usually mean HTTP proxies that support CONNECT.
+		return "http"
+	case "socks4", "socks5":
+		// Keep the previous behavior: try SOCKS4 candidates through the SOCKS5 validator and let validation reject bad ones.
+		return "socks5"
+	default:
+		return ""
+	}
+}
+
+func normalizeProxyAddress(addr string) (string, bool) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", false
+	}
+	if fields := strings.Fields(addr); len(fields) > 0 {
+		addr = fields[0]
+	}
+	addr = strings.TrimRight(addr, "/")
+
+	parts := strings.Split(addr, ":")
+	if len(parts) != 2 || parts[0] == "" {
+		return "", false
+	}
+	port, err := strconv.Atoi(parts[1])
+	if err != nil || port <= 0 || port > 65535 {
+		return "", false
+	}
+	return parts[0] + ":" + strconv.Itoa(port), true
 }
