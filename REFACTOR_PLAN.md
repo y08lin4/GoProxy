@@ -1,118 +1,192 @@
 # GoProxy 解耦重构计划
 
-## 当前状态
+本文只描述当前仓库的重构路线，不再引用外部项目计划。
 
-GoProxy 已经按 `fetcher`、`validator`、`pool`、`proxy`、`webui`、`storage` 等目录拆包，但核心业务仍然耦合在一起：
+## 总目标
 
-- `main.go` 同时负责启动、调度、抓取、验证、入池和监控。
-- `storage.Storage` 是巨型对象，混合代理、订阅、来源状态、统计和迁移。
-- `validator` 依赖 `fetcher.GetExitIPInfo`，验证和出口信息查询边界不清晰。
-- `pool.Manager` 同时做策略判断和数据库写入。
-- `proxy` 和 `webui` 直接操作底层 `storage`，后续替换存储或策略较难。
-
-## 目标架构
-
-长期目标是把系统拆成明确的几层：
+把 GoProxy 从“功能都能跑但模块互相知道太多”的结构，逐步改成：
 
 ```text
-cmd/goproxy
-  main.go
+main / cmd
+  只负责装配和生命周期
 
-internal/app
-  lifecycle.go
-  scheduler.go
+service
+  编排业务流程
 
-internal/domain
-  proxy.go
-  source.go
-  pool.go
-  subscription.go
+domain + ports
+  定义核心模型和边界
 
-internal/ports
-  repository.go
-  fetcher.go
-  validator.go
-  selector.go
-  geoip.go
-
-internal/service
-  refill_service.go
-  pool_service.go
-  health_service.go
-  optimize_service.go
-  subscription_service.go
-  proxy_select_service.go
-
-internal/adapter
-  storage/sqlite
-  source/httpfetcher
-  validator/httpvalidator
-  geoip
-  proxyserver/http
-  proxyserver/socks5
-  webui
-  config/file
+adapter
+  fetcher / validator / storage / proxy / webui 等具体实现
 ```
 
-## 分阶段落地
+## 已完成阶段
 
-### 第 0 阶段：保存当前功能
+### 第 1 阶段：补池流程服务化
 
-- 单独提交代理源补充和解析增强。
-- 确保 `go test -count=1 ./...` 通过。
+提交：`849ce48 重构补池流程并增加验证取消`
 
-### 第 1 阶段：抽出补池服务
+- 新增 `internal/service/refill_service.go`。
+- 从 `main.go` 抽出补池流程。
+- 验证流支持 `context.Context` 取消。
+- 新增 `MaxCandidatesPerSource` 控制每个源的候选数量。
 
-- 从 `main.go` 移出 `smartFetchAndFill`。
-- 新增 `internal/service.RefillService`。
-- `main.go` 只负责装配依赖和启动生命周期。
-- `ValidateStream` 增加 `context.Context` 取消能力。
-- 新增 `MaxCandidatesPerSource`，限制单个源进入验证队列的候选数量。
+### 第 2 阶段：抽核心模型和 ports
 
-### 第 2 阶段：抽 domain 和 ports
+提交：`b78512a 抽取核心领域模型和补池端口`
 
-- 将 `storage.Proxy`、`storage.IPInfo`、`storage.Subscription`、`fetcher.Source` 等模型迁移到 `internal/domain`。
-- 用类型别名兼容旧代码，避免一次性大改。
-- 定义 repository / validator / fetcher 接口。
+- 新增 `internal/domain/types.go`。
+- 新增 `internal/ports/refill.go`。
+- `storage.Proxy`、`validator.Result`、`pool.PoolStatus`、`fetcher.Source` 改成类型别名，保留兼容。
+- `RefillService` 依赖接口而非具体包。
 
-### 第 3 阶段：拆 validator 和 geoip
+### 第 3 阶段：GeoIP 解耦
 
-- 将出口 IP、地理信息、IPPure 查询从 `validator` 移到独立 `geoip` resolver。
-- `validator` 只负责代理连通性和协议能力验证。
-- 国家过滤策略独立成 policy。
+提交：`81ff534 拆分 GeoIP 解析与验证器`
 
-### 第 4 阶段：拆 pool 策略和执行
+- 新增 `internal/geoip/resolver.go`。
+- 新增 `internal/ports/geoip.go`。
+- `validator` 不再依赖 `fetcher` 的 IP 查询实现。
+- `main.go` 和 WebUI 显式注入 GeoIP resolver。
 
-- `PoolPolicy` 只做容量、slot、替换决策。
-- `PoolService` 负责入池、替换、禁用和统计更新。
-- `storage` 降级为 repository 实现。
+### 第 4 阶段：代理池策略抽取
 
-### 第 5 阶段：拆 proxy server
+提交：`9ed816c 抽取代理池策略`
 
-- HTTP/SOCKS5 server 只做协议处理和转发。
-- 代理选择交给 `ProxySelector`。
-- 失败处理交给 `FailureReporter` / `PoolService`。
+- 新增 `pool/policy.go`。
+- 抽出池状态判断、slot 决策、抓取判断和替换判断。
+- `pool.Manager` 保持对外接口稳定。
 
-### 第 6 阶段：WebUI 只调用 service
+### 第 5 阶段：代理选择和失败处理抽取
 
-- WebUI handler 不再直接操作 `storage`。
-- API 按功能拆分 handler、middleware、DTO。
-- 配置保存、订阅刷新、手动抓取都通过 service。
+提交：`8e4b198 抽取代理选择和失败上报`
 
-## 当前优先级
+- 新增 `proxy.Selector`。
+- 新增 `proxy.FailureReporter`。
+- HTTP 与 SOCKS5 server 共用选择与失败处理逻辑。
+- 增加选择和失败策略测试。
 
-第一批重构只做低风险、高收益改动：
+### 基础阶段：代理源和解析增强
 
-1. 抽出 `RefillService`。
-2. 给验证流加取消机制。
-3. 限制每个代理源候选数量。
+提交：`67d6486 补充代理源并增强解析`
 
-这三个改动能明显降低新增代理源后的 goroutine、网络和 CPU 压力，同时为后续模块解耦打基础。
+- 增加多个公开代理源。
+- 增强 `fetcher.parseProxyList`。
+- 新增 fetcher 解析测试。
 
-## 已完成进度
+## 当前结构问题
 
-- 第 0 阶段：已提交代理源补充和解析增强。
-- 第 1 阶段：已抽出 `internal/service.RefillService`，并加入验证取消和候选数量上限。
-- 第 2 阶段：已新增 `internal/domain` 核心模型与 `internal/ports` 补池接口，`storage`/`fetcher`/`pool`/`validator` 通过类型别名保持向后兼容。
-- 第 3 阶段：已新增 `internal/geoip` 和 `ports.GeoIPResolver`，`validator` 不再依赖 `fetcher` 查询出口 IP。
-- 第 4 阶段：已新增 `pool.Policy`，将池状态、抓取需求、slot 入池和替换判断等纯策略从 `pool.Manager` 中拆出。
+优先级从高到低：
+
+1. `storage.Storage` 职责过多：代理、订阅、源状态、统计、迁移都在一个对象里。
+2. `webui` handler 直接调用多个底层模块，业务逻辑分散。
+3. `custom.Manager` 同时处理订阅、sing-box 进程、验证和存储。
+4. `proxy` 内仍有上游拨号、HTTP CONNECT 响应判断等可拆逻辑。
+5. `main.go` 仍承担较多后台任务调度细节。
+
+## 下一阶段建议
+
+### 第 6 阶段：拆 storage 仓储边界
+
+目标：先不改变数据库 schema，只拆接口和文件。
+
+建议拆分：
+
+```text
+storage/
+  storage.go              # DB 打开、迁移、事务基础
+  proxy_repository.go     # proxies 表读写
+  subscription_repository.go
+  source_repository.go
+  stats_repository.go
+```
+
+配套 ports：
+
+```text
+internal/ports/proxy_store.go
+internal/ports/subscription_store.go
+internal/ports/source_store.go
+```
+
+验收：
+
+- 外部行为不变。
+- `go test -count=1 ./...` 通过。
+- `storage` 文件职责更清晰。
+
+### 第 7 阶段：WebUI service 化
+
+目标：WebUI handler 只负责 HTTP 输入输出。
+
+建议新增：
+
+```text
+internal/service/admin_service.go
+internal/service/subscription_service.go
+internal/service/config_service.go
+```
+
+把这些逻辑移出 handler：
+
+- 手动添加/删除代理。
+- 手动验证代理。
+- 更新配置。
+- 触发抓取和健康检查。
+- 订阅 CRUD 和刷新。
+
+### 第 8 阶段：订阅管理解耦
+
+目标：把 `custom.Manager` 拆成小组件。
+
+建议：
+
+```text
+custom/parser.go
+custom/fetcher.go
+custom/converter.go
+custom/singbox_process.go
+internal/service/subscription_refresh_service.go
+```
+
+### 第 9 阶段：上游拨号器抽象
+
+目标：让 `proxy.Server` 只负责协议入口。
+
+建议：
+
+```text
+proxy/upstream_dialer.go
+proxy/http_transport.go
+proxy/socks5_transport.go
+```
+
+抽出：
+
+- HTTP CONNECT 到上游代理。
+- SOCKS5 handshake 到上游代理。
+- HTTP client 构建。
+- CONNECT 响应解析。
+
+## 每阶段固定流程
+
+```powershell
+gofmt -w <changed-files>
+go test -count=1 ./...
+git diff --check
+git status --short --branch
+git commit -m "..."
+git push
+```
+
+## 当前分支
+
+```text
+refactor/decouple-core
+```
+
+远端：
+
+```text
+https://github.com/y08lin4/GoProxy.git
+```
