@@ -115,3 +115,4 @@ internal/adapter
 - 第 1 阶段：已抽出 `internal/service.RefillService`，并加入验证取消和候选数量上限。
 - 第 2 阶段：已新增 `internal/domain` 核心模型与 `internal/ports` 补池接口，`storage`/`fetcher`/`pool`/`validator` 通过类型别名保持向后兼容。
 - 第 3 阶段：已新增 `internal/geoip` 和 `ports.GeoIPResolver`，`validator` 不再依赖 `fetcher` 查询出口 IP。
+- 第 4 阶段：已新增 `pool.Policy`，将池状态、抓取需求、slot 入池和替换判断等纯策略从 `pool.Manager` 中拆出。
