@@ -6,6 +6,7 @@ Thumbs.db
 
 # Go build artifacts
 goproxy
+proxygo
 proxy-pool
 *.exe
 *.out
@@ -26,6 +27,8 @@ test/test_proxy.exe
 config.json
 data/
 !data/.gitkeep
+subscriptions/
+singbox/
 
 # Environment variables
 .env
