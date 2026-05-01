@@ -7,13 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"golang.org/x/net/proxy"
 	"goproxy/config"
 	"goproxy/storage"
 )
@@ -112,7 +109,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 		tried = append(tried, p.Address)
 
-		client, err := s.buildClient(p)
+		client, err := buildUpstreamHTTPClient(p, time.Duration(s.cfg.ValidateTimeout)*time.Second)
 		if err != nil {
 			s.reporter.Remove(p)
 			continue
@@ -166,7 +163,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 
 		tried = append(tried, p.Address)
 
-		conn, err := s.dialViaProxy(p, r.Host)
+		conn, err := dialUpstreamProxy(p, r.Host, time.Duration(s.cfg.ValidateTimeout)*time.Second)
 		if err != nil {
 			log.Printf("[tunnel] dial %s via %s failed, removing", r.Host, p.Address)
 			s.reporter.Failure(p)
@@ -198,64 +195,6 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "all proxies failed", http.StatusBadGateway)
-}
-
-func (s *Server) dialViaProxy(p *storage.Proxy, host string) (net.Conn, error) {
-	timeout := time.Duration(s.cfg.ValidateTimeout) * time.Second
-	switch p.Protocol {
-	case "http":
-		conn, err := net.DialTimeout("tcp", p.Address, timeout)
-		if err != nil {
-			return nil, err
-		}
-		// 发送 CONNECT 请求给上游 HTTP 代理
-		fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", host, host)
-		buf := make([]byte, 256)
-		n, err := conn.Read(buf)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
-		if n < 12 {
-			conn.Close()
-			return nil, fmt.Errorf("short response from proxy")
-		}
-		return conn, nil
-	case "socks5":
-		dialer, err := proxy.SOCKS5("tcp", p.Address, nil, proxy.Direct)
-		if err != nil {
-			return nil, err
-		}
-		return dialer.Dial("tcp", host)
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", p.Protocol)
-	}
-}
-
-func (s *Server) buildClient(p *storage.Proxy) (*http.Client, error) {
-	timeout := time.Duration(s.cfg.ValidateTimeout) * time.Second
-	switch p.Protocol {
-	case "http":
-		proxyURL, err := url.Parse(fmt.Sprintf("http://%s", p.Address))
-		if err != nil {
-			return nil, err
-		}
-		return &http.Client{
-			Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
-			Timeout:   timeout,
-		}, nil
-	case "socks5":
-		dialer, err := proxy.SOCKS5("tcp", p.Address, nil, proxy.Direct)
-		if err != nil {
-			return nil, err
-		}
-		return &http.Client{
-			Transport: &http.Transport{Dial: dialer.Dial},
-			Timeout:   timeout,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", p.Protocol)
-	}
 }
 
 func transfer(dst io.WriteCloser, src io.ReadCloser) {
