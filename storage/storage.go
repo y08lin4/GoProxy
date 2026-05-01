@@ -8,74 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"goproxy/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
-type Proxy struct {
-	ID           int64  `json:"id"`
-	Address      string `json:"address"`
-	Protocol     string `json:"protocol"`
-	ExitIP       string `json:"exit_ip"`
-	ExitLocation string `json:"exit_location"`
-	IPInfo
-	Latency        int       `json:"latency"`
-	QualityGrade   string    `json:"quality_grade"`
-	UseCount       int       `json:"use_count"`
-	SuccessCount   int       `json:"success_count"`
-	FailCount      int       `json:"fail_count"`
-	LastUsed       time.Time `json:"last_used"`
-	LastCheck      time.Time `json:"last_check"`
-	CreatedAt      time.Time `json:"created_at"`
-	Status         string    `json:"status"`
-	Source         string    `json:"source"`          // "free" 或 "custom"
-	SubscriptionID int64     `json:"subscription_id"` // 所属订阅ID（0=免费代理）
-}
-
-// IPInfo 保存 IPPure 返回的出口 IP 画像信息。
-type IPInfo struct {
-	IPInfoAvailable bool   `json:"ip_info_available"`
-	IP              string `json:"ip"`
-	ASN             int    `json:"asn"`
-	ASOrganization  string `json:"as_organization"`
-	Country         string `json:"country"`
-	CountryCode     string `json:"country_code"`
-	Region          string `json:"region"`
-	RegionCode      string `json:"region_code"`
-	City            string `json:"city"`
-	Timezone        string `json:"timezone"`
-	FraudScore      int    `json:"fraud_score"`
-	IsResidential   bool   `json:"is_residential"`
-	IsBroadcast     bool   `json:"is_broadcast"`
-}
-
-// Subscription 订阅信息
-type Subscription struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	URL         string    `json:"url"`
-	FilePath    string    `json:"file_path"`
-	Format      string    `json:"format"` // clash / plain / base64 / auto
-	RefreshMin  int       `json:"refresh_min"`
-	LastFetch   time.Time `json:"last_fetch"`
-	LastSuccess time.Time `json:"last_success"` // 最后一次有可用节点的时间
-	Status      string    `json:"status"`       // active / paused
-	ProxyCount  int       `json:"proxy_count"`
-	CreatedAt   time.Time `json:"created_at"`
-	Contributed bool      `json:"contributed"` // 是否为访客贡献
-}
-
-// SourceStatus 代理源状态
-type SourceStatus struct {
-	ID               int64
-	URL              string
-	SuccessCount     int
-	FailCount        int
-	ConsecutiveFails int
-	LastSuccess      time.Time
-	LastFail         time.Time
-	Status           string // active/degraded/disabled
-	DisabledUntil    time.Time
-}
+type Proxy = domain.Proxy
+type IPInfo = domain.IPInfo
+type Subscription = domain.Subscription
+type SourceStatus = domain.SourceStatus
 
 type Storage struct {
 	db *sql.DB

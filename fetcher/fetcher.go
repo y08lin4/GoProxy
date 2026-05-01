@@ -10,14 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"goproxy/internal/domain"
 	"goproxy/storage"
 )
 
-// 代理来源定义
-type Source struct {
-	URL      string
-	Protocol string // http 或 socks5
-}
+type Source = domain.Source
 
 // 快速更新源（5-30分钟更新）- 用于紧急和补充模式
 var fastUpdateSources = []Source{

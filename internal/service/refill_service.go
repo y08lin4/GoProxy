@@ -7,10 +7,8 @@ import (
 	"sync/atomic"
 
 	"goproxy/config"
-	"goproxy/fetcher"
-	"goproxy/pool"
-	"goproxy/storage"
-	"goproxy/validator"
+	"goproxy/internal/domain"
+	"goproxy/internal/ports"
 )
 
 // RefillService coordinates source fetching, validation, and pool insertion.
@@ -19,14 +17,14 @@ import (
 // and pool keep their focused responsibilities, while the end-to-end refill
 // workflow no longer lives in main.go.
 type RefillService struct {
-	fetcher   *fetcher.Fetcher
-	validator *validator.Validator
-	pool      *pool.Manager
+	fetcher   ports.SmartFetcher
+	validator ports.ProxyValidator
+	pool      ports.PoolManager
 
 	running atomic.Bool
 }
 
-func NewRefillService(fetch *fetcher.Fetcher, validate *validator.Validator, poolMgr *pool.Manager) *RefillService {
+func NewRefillService(fetch ports.SmartFetcher, validate ports.ProxyValidator, poolMgr ports.PoolManager) *RefillService {
 	return &RefillService{
 		fetcher:   fetch,
 		validator: validate,
@@ -84,7 +82,7 @@ func (s *RefillService) Run(ctx context.Context) {
 	var rejectedGeo atomic.Int32
 	var rejectedFull atomic.Int32
 
-	processResult := func(result validator.Result) {
+	processResult := func(result domain.ValidationResult) {
 		if !result.Valid {
 			return
 		}
@@ -105,7 +103,7 @@ func (s *RefillService) Run(ctx context.Context) {
 			return
 		}
 
-		proxyToAdd := storage.Proxy{
+		proxyToAdd := domain.Proxy{
 			Address:      result.Proxy.Address,
 			Protocol:     result.Proxy.Protocol,
 			ExitIP:       result.ExitIP,
@@ -138,7 +136,7 @@ func (s *RefillService) Run(ctx context.Context) {
 	}
 
 	var wg sync.WaitGroup
-	validateGroup := func(name string, proxies []storage.Proxy) {
+	validateGroup := func(name string, proxies []domain.Proxy) {
 		defer wg.Done()
 
 		count := 0
@@ -176,7 +174,7 @@ func (s *RefillService) Run(ctx context.Context) {
 		finalStatus.State, finalStatus.HTTP, finalStatus.SOCKS5)
 }
 
-func splitCandidatesByProtocol(candidates []storage.Proxy) (httpCandidates, socks5Candidates []storage.Proxy) {
+func splitCandidatesByProtocol(candidates []domain.Proxy) (httpCandidates, socks5Candidates []domain.Proxy) {
 	for _, c := range candidates {
 		if c.Protocol == "http" {
 			httpCandidates = append(httpCandidates, c)

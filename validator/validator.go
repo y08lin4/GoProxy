@@ -13,6 +13,7 @@ import (
 	"golang.org/x/net/proxy"
 	"goproxy/config"
 	"goproxy/fetcher"
+	"goproxy/internal/domain"
 	"goproxy/storage"
 )
 
@@ -46,14 +47,7 @@ func New(concurrency, timeoutSec int, validateURL string) *Validator {
 	}
 }
 
-type Result struct {
-	Proxy        storage.Proxy
-	Valid        bool
-	Latency      time.Duration
-	ExitIP       string
-	ExitLocation string
-	IPInfo       storage.IPInfo
-}
+type Result = domain.ValidationResult
 
 // HTTPS 测试目标列表，随机选一个验证代理的 CONNECT 隧道能力
 var httpsTestTargets = []string{

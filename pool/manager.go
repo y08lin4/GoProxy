@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"goproxy/config"
+	"goproxy/internal/domain"
 	"goproxy/storage"
 )
 
@@ -20,18 +21,7 @@ func NewManager(s *storage.Storage, cfg *config.Config) *Manager {
 	}
 }
 
-// PoolStatus 池子状态
-type PoolStatus struct {
-	Total            int
-	HTTP             int
-	SOCKS5           int
-	HTTPSlots        int
-	SOCKS5Slots      int
-	State            string // healthy/warning/critical/emergency
-	AvgLatencyHTTP   int
-	AvgLatencySocks5 int
-	CustomCount      int // 订阅代理数量
-}
+type PoolStatus = domain.PoolStatus
 
 // GetStatus 获取当前池子状态
 func (m *Manager) GetStatus() (*PoolStatus, error) {
