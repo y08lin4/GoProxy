@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"goproxy/config"
+	"goproxy/internal/geoip"
 	"goproxy/storage"
 	"goproxy/validator"
 )
@@ -43,7 +44,12 @@ func (c *Checker) run() {
 
 	// 每次用最新配置创建 validator
 	cfg := config.Get()
-	validate := validator.New(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL)
+	validate := validator.NewWithGeoIP(
+		cfg.ValidateConcurrency,
+		cfg.ValidateTimeout,
+		cfg.ValidateURL,
+		geoip.NewResolver(cfg.IPQueryRateLimit),
+	)
 
 	log.Printf("[checker] checking %d proxies...", len(proxies))
 	results := validate.ValidateAll(proxies)

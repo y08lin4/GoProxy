@@ -114,3 +114,4 @@ internal/adapter
 - 第 0 阶段：已提交代理源补充和解析增强。
 - 第 1 阶段：已抽出 `internal/service.RefillService`，并加入验证取消和候选数量上限。
 - 第 2 阶段：已新增 `internal/domain` 核心模型与 `internal/ports` 补池接口，`storage`/`fetcher`/`pool`/`validator` 通过类型别名保持向后兼容。
+- 第 3 阶段：已新增 `internal/geoip` 和 `ports.GeoIPResolver`，`validator` 不再依赖 `fetcher` 查询出口 IP。

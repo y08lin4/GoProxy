@@ -13,6 +13,7 @@ import (
 
 	"goproxy/config"
 	"goproxy/custom"
+	"goproxy/internal/ports"
 	"goproxy/logger"
 	"goproxy/pool"
 	"goproxy/storage"
@@ -51,16 +52,18 @@ type Server struct {
 	cfg           *config.Config
 	poolMgr       *pool.Manager
 	customMgr     *custom.Manager
+	geoIP         ports.GeoIPResolver
 	fetchTrigger  FetchTrigger
 	configChanged chan<- struct{}
 }
 
-func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Manager, ft FetchTrigger, cc chan<- struct{}) *Server {
+func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Manager, geoIP ports.GeoIPResolver, ft FetchTrigger, cc chan<- struct{}) *Server {
 	return &Server{
 		storage:       s,
 		cfg:           cfg,
 		poolMgr:       pm,
 		customMgr:     cm,
+		geoIP:         geoIP,
 		fetchTrigger:  ft,
 		configChanged: cc,
 	}
@@ -273,7 +276,7 @@ func (s *Server) apiRefreshProxy(w http.ResponseWriter, r *http.Request) {
 	// 异步验证并更新
 	go func() {
 		cfg := config.Get()
-		v := validator.New(1, cfg.ValidateTimeout, cfg.ValidateURL)
+		v := validator.NewWithGeoIP(1, cfg.ValidateTimeout, cfg.ValidateURL, s.geoIP)
 
 		log.Printf("[webui] refreshing proxy: %s", req.Address)
 		valid, latency, exitIP, exitLocation, ipInfo := v.ValidateOne(*targetProxy)
@@ -323,7 +326,7 @@ func (s *Server) apiRefreshLatency(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cfg := config.Get()
-		validate := validator.New(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL)
+		validate := validator.NewWithGeoIP(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL, s.geoIP)
 
 		log.Printf("[webui] refreshing latency for %d proxies...", len(proxies))
 		updated := 0

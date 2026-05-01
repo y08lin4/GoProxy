@@ -10,6 +10,7 @@ import (
 	"goproxy/config"
 	"goproxy/custom"
 	"goproxy/fetcher"
+	"goproxy/internal/geoip"
 	"goproxy/internal/service"
 	"goproxy/logger"
 	"goproxy/optimizer"
@@ -44,13 +45,13 @@ func main() {
 	}
 	defer store.Close()
 
-	// 初始化限流器
-	fetcher.InitIPQueryLimiter(cfg.IPQueryRateLimit)
+	// 初始化出口 IP/地理信息解析器
+	geoResolver := geoip.NewResolver(cfg.IPQueryRateLimit)
 
 	// 初始化核心模块
 	sourceMgr := fetcher.NewSourceManager(store.GetDB())
 	fetch := fetcher.New(cfg.HTTPSourceURL, cfg.SOCKS5SourceURL, sourceMgr, cfg.MaxCandidatesPerSource)
-	validate := validator.New(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL)
+	validate := validator.NewWithGeoIP(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL, geoResolver)
 	poolMgr := pool.NewManager(store, cfg)
 	healthChecker := checker.NewHealthChecker(store, validate, cfg, poolMgr)
 	opt := optimizer.NewOptimizer(store, fetch, validate, poolMgr, cfg)
@@ -95,7 +96,7 @@ func main() {
 	configChanged := make(chan struct{}, 1)
 
 	// 启动 WebUI（传递池子管理器和订阅管理器）
-	ui := webui.New(store, cfg, poolMgr, customMgr, func() {
+	ui := webui.New(store, cfg, poolMgr, customMgr, geoResolver, func() {
 		refillSvc.Run(context.Background())
 	}, configChanged)
 	ui.Start()

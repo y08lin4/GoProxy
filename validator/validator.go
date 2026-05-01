@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/net/proxy"
 	"goproxy/config"
-	"goproxy/fetcher"
 	"goproxy/internal/domain"
+	"goproxy/internal/ports"
 	"goproxy/storage"
 )
 
@@ -23,6 +23,7 @@ type Validator struct {
 	validateURL   string
 	maxResponseMs int
 	cfg           *config.Config
+	geoIP         ports.GeoIPResolver
 }
 
 func concurrencyBuffer(total, concurrency int) int {
@@ -33,6 +34,10 @@ func concurrencyBuffer(total, concurrency int) int {
 }
 
 func New(concurrency, timeoutSec int, validateURL string) *Validator {
+	return NewWithGeoIP(concurrency, timeoutSec, validateURL, nil)
+}
+
+func NewWithGeoIP(concurrency, timeoutSec int, validateURL string, geoIP ports.GeoIPResolver) *Validator {
 	cfg := config.Get()
 	maxMs := 0
 	if cfg != nil {
@@ -44,6 +49,7 @@ func New(concurrency, timeoutSec int, validateURL string) *Validator {
 		validateURL:   validateURL,
 		maxResponseMs: maxMs,
 		cfg:           cfg,
+		geoIP:         geoIP,
 	}
 }
 
@@ -221,7 +227,10 @@ func (v *Validator) ValidateOneContext(ctx context.Context, p storage.Proxy) (bo
 	default:
 	}
 
-	exitIP, exitLocation, ipInfo := fetcher.GetExitIPInfo(client)
+	if v.geoIP == nil {
+		return false, latency, "", "", storage.IPInfo{}
+	}
+	exitIP, exitLocation, ipInfo := v.geoIP.Resolve(ctx, client)
 
 	// 必须能获取到出口信息
 	if exitIP == "" || exitLocation == "" {

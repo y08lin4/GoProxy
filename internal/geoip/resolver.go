@@ -1,4 +1,4 @@
-package fetcher
+package geoip
 
 import (
 	"context"
@@ -8,66 +8,76 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	"goproxy/storage"
+	"goproxy/internal/domain"
 )
 
-// IPQueryLimiter 全局IP查询限流器
-var IPQueryLimiter *rate.Limiter
-
-// InitIPQueryLimiter 初始化限流器
-func InitIPQueryLimiter(rps int) {
-	IPQueryLimiter = rate.NewLimiter(rate.Limit(rps), rps*2)
+// Resolver resolves a proxy client's exit IP, location and optional risk profile.
+type Resolver struct {
+	limiter *rate.Limiter
 }
 
-// GetExitIPInfo 通过代理获取出口 IP、地理位置和 IPPure 风控属性（多源降级）
-func GetExitIPInfo(client *http.Client) (string, string, storage.IPInfo) {
-	// 等待限流令牌
-	if IPQueryLimiter != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// NewResolver creates a resolver with an optional global rate limit.
+func NewResolver(rps int) *Resolver {
+	var limiter *rate.Limiter
+	if rps > 0 {
+		limiter = rate.NewLimiter(rate.Limit(rps), rps*2)
+	}
+	return &Resolver{limiter: limiter}
+}
+
+// Resolve implements ports.GeoIPResolver.
+func (r *Resolver) Resolve(ctx context.Context, client *http.Client) (string, string, domain.IPInfo) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if client == nil {
+		return "", "", domain.IPInfo{}
+	}
+
+	if r != nil && r.limiter != nil {
+		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if err := IPQueryLimiter.Wait(ctx); err != nil {
-			return "", "", storage.IPInfo{}
+		if err := r.limiter.Wait(waitCtx); err != nil {
+			return "", "", domain.IPInfo{}
 		}
 	}
 
-	// 优先级1：IPPure（IP、位置、ASN、欺诈分、住宅/广播属性）
-	if info := tryIPPure(client); info.IPInfoAvailable && info.IP != "" {
+	if info := r.tryIPPure(ctx, client); info.IPInfoAvailable && info.IP != "" {
 		return info.IP, formatIPPureLocation(info), info
 	}
 
-	// 优先级2：ip-api.com
-	if ip, loc := tryIPAPI(client); ip != "" {
-		return ip, loc, storage.IPInfo{}
+	if ip, loc := r.tryIPAPI(ctx, client); ip != "" {
+		return ip, loc, domain.IPInfo{}
 	}
 
-	// 优先级3：ipapi.co
-	if ip, loc := tryIPAPICo(client); ip != "" {
-		return ip, loc, storage.IPInfo{}
+	if ip, loc := r.tryIPAPICo(ctx, client); ip != "" {
+		return ip, loc, domain.IPInfo{}
 	}
 
-	// 优先级4：ipinfo.io
-	if ip, loc := tryIPInfo(client); ip != "" {
-		return ip, loc, storage.IPInfo{}
+	if ip, loc := r.tryIPInfo(ctx, client); ip != "" {
+		return ip, loc, domain.IPInfo{}
 	}
 
-	// 优先级5：仅获取IP
-	if ip := tryHTTPBinIP(client); ip != "" {
-		return ip, "UNKNOWN", storage.IPInfo{}
+	if ip := r.tryHTTPBinIP(ctx, client); ip != "" {
+		return ip, "UNKNOWN", domain.IPInfo{}
 	}
 
-	return "", "", storage.IPInfo{}
+	return "", "", domain.IPInfo{}
 }
 
-// tryIPPure 尝试 IPPure MyIP Info API
-func tryIPPure(client *http.Client) storage.IPInfo {
-	resp, err := client.Get("https://my.ippure.com/v1/info")
+func (r *Resolver) tryIPPure(ctx context.Context, client *http.Client) domain.IPInfo {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://my.ippure.com/v1/info", nil)
 	if err != nil {
-		return storage.IPInfo{}
+		return domain.IPInfo{}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return domain.IPInfo{}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return storage.IPInfo{}
+		return domain.IPInfo{}
 	}
 
 	var result struct {
@@ -85,10 +95,10 @@ func tryIPPure(client *http.Client) storage.IPInfo {
 		IsBroadcast    bool   `json:"isBroadcast"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.IP == "" {
-		return storage.IPInfo{}
+		return domain.IPInfo{}
 	}
 
-	return storage.IPInfo{
+	return domain.IPInfo{
 		IPInfoAvailable: true,
 		IP:              result.IP,
 		ASN:             result.ASN,
@@ -105,7 +115,7 @@ func tryIPPure(client *http.Client) storage.IPInfo {
 	}
 }
 
-func formatIPPureLocation(info storage.IPInfo) string {
+func formatIPPureLocation(info domain.IPInfo) string {
 	location := info.CountryCode
 	if location == "" {
 		location = info.Country
@@ -119,9 +129,12 @@ func formatIPPureLocation(info storage.IPInfo) string {
 	return "UNKNOWN"
 }
 
-// tryIPAPI 尝试 ip-api.com
-func tryIPAPI(client *http.Client) (string, string) {
-	resp, err := client.Get("http://ip-api.com/json/?fields=status,country,countryCode,city,query")
+func (r *Resolver) tryIPAPI(ctx context.Context, client *http.Client) (string, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://ip-api.com/json/?fields=status,country,countryCode,city,query", nil)
+	if err != nil {
+		return "", ""
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", ""
 	}
@@ -147,9 +160,12 @@ func tryIPAPI(client *http.Client) (string, string) {
 	return result.Query, location
 }
 
-// tryIPAPICo 尝试 ipapi.co
-func tryIPAPICo(client *http.Client) (string, string) {
-	resp, err := client.Get("https://ipapi.co/json/")
+func (r *Resolver) tryIPAPICo(ctx context.Context, client *http.Client) (string, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ipapi.co/json/", nil)
+	if err != nil {
+		return "", ""
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", ""
 	}
@@ -173,9 +189,12 @@ func tryIPAPICo(client *http.Client) (string, string) {
 	return result.IP, location
 }
 
-// tryIPInfo 尝试 ipinfo.io
-func tryIPInfo(client *http.Client) (string, string) {
-	resp, err := client.Get("https://ipinfo.io/json")
+func (r *Resolver) tryIPInfo(ctx context.Context, client *http.Client) (string, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ipinfo.io/json", nil)
+	if err != nil {
+		return "", ""
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", ""
 	}
@@ -199,9 +218,12 @@ func tryIPInfo(client *http.Client) (string, string) {
 	return result.IP, location
 }
 
-// tryHTTPBinIP 尝试 httpbin（仅获取IP）
-func tryHTTPBinIP(client *http.Client) string {
-	resp, err := client.Get("https://httpbin.org/ip")
+func (r *Resolver) tryHTTPBinIP(ctx context.Context, client *http.Client) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://httpbin.org/ip", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}
