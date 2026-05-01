@@ -369,8 +369,9 @@ func (s *Server) apiConfig(w http.ResponseWriter, r *http.Request) {
 		"max_latency_healthy":   cfg.MaxLatencyHealthy,
 
 		// 验证配置
-		"validate_concurrency": cfg.ValidateConcurrency,
-		"validate_timeout":     cfg.ValidateTimeout,
+		"validate_concurrency":      cfg.ValidateConcurrency,
+		"validate_timeout":          cfg.ValidateTimeout,
+		"max_candidates_per_source": cfg.MaxCandidatesPerSource,
 
 		// 健康检查配置
 		"health_check_interval":   cfg.HealthCheckInterval,
@@ -401,25 +402,26 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		PoolMaxSize           int      `json:"pool_max_size"`
-		PoolHTTPRatio         float64  `json:"pool_http_ratio"`
-		PoolMinPerProtocol    int      `json:"pool_min_per_protocol"`
-		MaxLatencyMs          int      `json:"max_latency_ms"`
-		MaxLatencyEmergency   int      `json:"max_latency_emergency"`
-		MaxLatencyHealthy     int      `json:"max_latency_healthy"`
-		ValidateConcurrency   int      `json:"validate_concurrency"`
-		ValidateTimeout       int      `json:"validate_timeout"`
-		HealthCheckInterval   int      `json:"health_check_interval"`
-		HealthCheckBatchSize  int      `json:"health_check_batch_size"`
-		OptimizeInterval      int      `json:"optimize_interval"`
-		ReplaceThreshold      float64  `json:"replace_threshold"`
-		BlockedCountries      []string `json:"blocked_countries"`
-		AllowedCountries      []string `json:"allowed_countries"`
-		CustomProxyMode       string   `json:"custom_proxy_mode"`
-		CustomPriority        *bool    `json:"custom_priority"`
-		CustomFreePriority    *bool    `json:"custom_free_priority"`
-		CustomProbeInterval   int      `json:"custom_probe_interval"`
-		CustomRefreshInterval int      `json:"custom_refresh_interval"`
+		PoolMaxSize            int      `json:"pool_max_size"`
+		PoolHTTPRatio          float64  `json:"pool_http_ratio"`
+		PoolMinPerProtocol     int      `json:"pool_min_per_protocol"`
+		MaxLatencyMs           int      `json:"max_latency_ms"`
+		MaxLatencyEmergency    int      `json:"max_latency_emergency"`
+		MaxLatencyHealthy      int      `json:"max_latency_healthy"`
+		ValidateConcurrency    int      `json:"validate_concurrency"`
+		ValidateTimeout        int      `json:"validate_timeout"`
+		MaxCandidatesPerSource *int     `json:"max_candidates_per_source"`
+		HealthCheckInterval    int      `json:"health_check_interval"`
+		HealthCheckBatchSize   int      `json:"health_check_batch_size"`
+		OptimizeInterval       int      `json:"optimize_interval"`
+		ReplaceThreshold       float64  `json:"replace_threshold"`
+		BlockedCountries       []string `json:"blocked_countries"`
+		AllowedCountries       []string `json:"allowed_countries"`
+		CustomProxyMode        string   `json:"custom_proxy_mode"`
+		CustomPriority         *bool    `json:"custom_priority"`
+		CustomFreePriority     *bool    `json:"custom_free_priority"`
+		CustomProbeInterval    int      `json:"custom_probe_interval"`
+		CustomRefreshInterval  int      `json:"custom_refresh_interval"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -448,6 +450,9 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 	newCfg.MaxLatencyHealthy = req.MaxLatencyHealthy
 	newCfg.ValidateConcurrency = req.ValidateConcurrency
 	newCfg.ValidateTimeout = req.ValidateTimeout
+	if req.MaxCandidatesPerSource != nil {
+		newCfg.MaxCandidatesPerSource = *req.MaxCandidatesPerSource
+	}
 	newCfg.HealthCheckInterval = req.HealthCheckInterval
 	newCfg.HealthCheckBatchSize = req.HealthCheckBatchSize
 	newCfg.OptimizeInterval = req.OptimizeInterval

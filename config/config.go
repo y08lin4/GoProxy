@@ -65,13 +65,14 @@ type Config struct {
 	MaxLatencyDegradation int // 降级模式超宽松延迟（默认5000ms）
 
 	// ========== 验证配置 ==========
-	ValidateConcurrency int    // 验证并发数（默认300）
-	ValidateTimeout     int    // 验证超时（秒）（默认8）
-	ValidateURL         string // 验证目标 URL
+	ValidateConcurrency    int    // 验证并发数（默认300）
+	ValidateTimeout        int    // 验证超时（秒）（默认8）
+	ValidateURL            string // 验证目标 URL
+	MaxCandidatesPerSource int    // max candidates kept from each source, <=0 means unlimited
 
 	// ========== 健康检查配置 ==========
-	HealthCheckInterval   int // 状态监控间隔（分钟）（默认5）
-	HealthCheckBatchSize  int // 每批验证数量（默认20）
+	HealthCheckInterval    int // 状态监控间隔（分钟）（默认5）
+	HealthCheckBatchSize   int // 每批验证数量（默认20）
 	HealthCheckConcurrency int // 批次内并发数（默认50）
 
 	// ========== 优化配置 ==========
@@ -123,7 +124,7 @@ func DefaultConfig() *Config {
 	if password == "" {
 		password = DefaultPassword
 	}
-	
+
 	// 读取代理认证配置
 	proxyAuthEnabled := os.Getenv("PROXY_AUTH_ENABLED") == "true"
 	proxyAuthUsername := os.Getenv("PROXY_AUTH_USERNAME")
@@ -135,7 +136,7 @@ func DefaultConfig() *Config {
 	if proxyAuthPassword != "" {
 		proxyAuthHash = passwordHash(proxyAuthPassword)
 	}
-	
+
 	// 读取地理过滤配置
 	blockedCountries := []string{"CN"} // 默认屏蔽中国大陆
 	if blockedEnv := os.Getenv("BLOCKED_COUNTRIES"); blockedEnv != "" {
@@ -162,7 +163,7 @@ func DefaultConfig() *Config {
 			}
 		}
 	}
-	
+
 	// 读取订阅代理配置
 	customProxyMode := os.Getenv("CUSTOM_PROXY_MODE")
 	if customProxyMode == "" {
@@ -182,21 +183,21 @@ func DefaultConfig() *Config {
 		SOCKS5Port:        ":7779",
 		StableSOCKS5Port:  ":7780",
 		DBPath:            dataDir() + "proxy.db",
-		
+
 		// 代理认证配置
 		ProxyAuthEnabled:      proxyAuthEnabled,
 		ProxyAuthUsername:     proxyAuthUsername,
 		ProxyAuthPassword:     proxyAuthPassword,
 		ProxyAuthPasswordHash: proxyAuthHash,
-		
+
 		// 地理过滤配置
 		BlockedCountries: blockedCountries,
 		AllowedCountries: allowedCountries,
 
 		// 池子容量配置
-		PoolMaxSize:        100,  // 总容量
-		PoolHTTPRatio:      0.3,  // HTTP占30%
-		PoolMinPerProtocol: 10,   // 每协议最少10个
+		PoolMaxSize:        100, // 总容量
+		PoolHTTPRatio:      0.3, // HTTP占30%
+		PoolMinPerProtocol: 10,  // 每协议最少10个
 
 		// 延迟标准配置
 		MaxLatencyMs:          2500, // 标准2.5秒
@@ -205,9 +206,10 @@ func DefaultConfig() *Config {
 		MaxLatencyDegradation: 5000, // 降级5秒
 
 		// 验证配置
-		ValidateConcurrency: 300,
-		ValidateTimeout:     10, // 从8秒增加到10秒
-		ValidateURL:         "http://www.gstatic.com/generate_204",
+		ValidateConcurrency:    300,
+		ValidateTimeout:        10, // 从8秒增加到10秒
+		ValidateURL:            "http://www.gstatic.com/generate_204",
+		MaxCandidatesPerSource: 1000,
 
 		// 健康检查配置
 		HealthCheckInterval:    5,  // 5分钟
@@ -236,12 +238,12 @@ func DefaultConfig() *Config {
 		SingBoxBasePort:       20000,
 
 		// 兼容旧配置
-		MaxResponseMs: 5000,
-		MaxFailCount:  3,
-		MaxRetry:      3,
-		FetchInterval: 30,
-		CheckInterval: 10,
-		HTTPSourceURL: "https://cdn.jsdelivr.net/gh/databay-labs/free-proxy-list/http.txt",
+		MaxResponseMs:   5000,
+		MaxFailCount:    3,
+		MaxRetry:        3,
+		FetchInterval:   30,
+		CheckInterval:   10,
+		HTTPSourceURL:   "https://cdn.jsdelivr.net/gh/databay-labs/free-proxy-list/http.txt",
 		SOCKS5SourceURL: "https://cdn.jsdelivr.net/gh/databay-labs/free-proxy-list/socks5.txt",
 	}
 }
@@ -281,6 +283,9 @@ func Load() *Config {
 			}
 			if saved.ValidateTimeout > 0 {
 				cfg.ValidateTimeout = saved.ValidateTimeout
+			}
+			if saved.MaxCandidatesPerSource != nil {
+				cfg.MaxCandidatesPerSource = *saved.MaxCandidatesPerSource
 			}
 
 			// 健康检查配置
@@ -365,8 +370,9 @@ type savedConfig struct {
 	MaxLatencyHealthy   int `json:"max_latency_healthy"`
 
 	// 验证配置
-	ValidateConcurrency int `json:"validate_concurrency"`
-	ValidateTimeout     int `json:"validate_timeout"`
+	ValidateConcurrency    int  `json:"validate_concurrency"`
+	ValidateTimeout        int  `json:"validate_timeout"`
+	MaxCandidatesPerSource *int `json:"max_candidates_per_source,omitempty"`
 
 	// 健康检查配置
 	HealthCheckInterval  int `json:"health_check_interval"`
@@ -402,30 +408,32 @@ func Save(cfg *Config) error {
 
 	customPriority := cfg.CustomPriority
 	customFreePriority := cfg.CustomFreePriority
+	maxCandidatesPerSource := cfg.MaxCandidatesPerSource
 	data, err := json.MarshalIndent(savedConfig{
-		PoolMaxSize:           cfg.PoolMaxSize,
-		PoolHTTPRatio:         cfg.PoolHTTPRatio,
-		PoolMinPerProtocol:    cfg.PoolMinPerProtocol,
-		MaxLatencyMs:          cfg.MaxLatencyMs,
-		MaxLatencyEmergency:   cfg.MaxLatencyEmergency,
-		MaxLatencyHealthy:     cfg.MaxLatencyHealthy,
-		ValidateConcurrency:   cfg.ValidateConcurrency,
-		ValidateTimeout:       cfg.ValidateTimeout,
-		HealthCheckInterval:   cfg.HealthCheckInterval,
-		HealthCheckBatchSize:  cfg.HealthCheckBatchSize,
-		OptimizeInterval:      cfg.OptimizeInterval,
-		ReplaceThreshold:      cfg.ReplaceThreshold,
-		BlockedCountries:      cfg.BlockedCountries,
-		AllowedCountries:      cfg.AllowedCountries,
-		CustomProxyMode:       cfg.CustomProxyMode,
-		CustomPriority:        &customPriority,
-		CustomFreePriority:    &customFreePriority,
-		CustomProbeInterval:   cfg.CustomProbeInterval,
-		CustomRefreshInterval: cfg.CustomRefreshInterval,
-		SingBoxPath:           cfg.SingBoxPath,
-		SingBoxBasePort:       cfg.SingBoxBasePort,
-		FetchInterval:         cfg.FetchInterval,
-		CheckInterval:         cfg.CheckInterval,
+		PoolMaxSize:            cfg.PoolMaxSize,
+		PoolHTTPRatio:          cfg.PoolHTTPRatio,
+		PoolMinPerProtocol:     cfg.PoolMinPerProtocol,
+		MaxLatencyMs:           cfg.MaxLatencyMs,
+		MaxLatencyEmergency:    cfg.MaxLatencyEmergency,
+		MaxLatencyHealthy:      cfg.MaxLatencyHealthy,
+		ValidateConcurrency:    cfg.ValidateConcurrency,
+		ValidateTimeout:        cfg.ValidateTimeout,
+		MaxCandidatesPerSource: &maxCandidatesPerSource,
+		HealthCheckInterval:    cfg.HealthCheckInterval,
+		HealthCheckBatchSize:   cfg.HealthCheckBatchSize,
+		OptimizeInterval:       cfg.OptimizeInterval,
+		ReplaceThreshold:       cfg.ReplaceThreshold,
+		BlockedCountries:       cfg.BlockedCountries,
+		AllowedCountries:       cfg.AllowedCountries,
+		CustomProxyMode:        cfg.CustomProxyMode,
+		CustomPriority:         &customPriority,
+		CustomFreePriority:     &customFreePriority,
+		CustomProbeInterval:    cfg.CustomProbeInterval,
+		CustomRefreshInterval:  cfg.CustomRefreshInterval,
+		SingBoxPath:            cfg.SingBoxPath,
+		SingBoxBasePort:        cfg.SingBoxBasePort,
+		FetchInterval:          cfg.FetchInterval,
+		CheckInterval:          cfg.CheckInterval,
 	}, "", "  ")
 	if err != nil {
 		return err

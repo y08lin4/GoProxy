@@ -1,16 +1,16 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"goproxy/checker"
 	"goproxy/config"
 	"goproxy/custom"
 	"goproxy/fetcher"
+	"goproxy/internal/service"
 	"goproxy/logger"
 	"goproxy/optimizer"
 	"goproxy/pool"
@@ -19,9 +19,6 @@ import (
 	"goproxy/validator"
 	"goproxy/webui"
 )
-
-var fetchRunning atomic.Bool
-var fetchMu sync.Mutex
 
 func main() {
 	// 初始化日志收集器
@@ -52,11 +49,12 @@ func main() {
 
 	// 初始化核心模块
 	sourceMgr := fetcher.NewSourceManager(store.GetDB())
-	fetch := fetcher.New(cfg.HTTPSourceURL, cfg.SOCKS5SourceURL, sourceMgr)
+	fetch := fetcher.New(cfg.HTTPSourceURL, cfg.SOCKS5SourceURL, sourceMgr, cfg.MaxCandidatesPerSource)
 	validate := validator.New(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL)
 	poolMgr := pool.NewManager(store, cfg)
 	healthChecker := checker.NewHealthChecker(store, validate, cfg, poolMgr)
 	opt := optimizer.NewOptimizer(store, fetch, validate, poolMgr, cfg)
+	refillSvc := service.NewRefillService(fetch, validate, poolMgr)
 
 	// 清理无效代理（免费代理删除，订阅代理禁用）
 	totalDeleted := 0
@@ -98,7 +96,7 @@ func main() {
 
 	// 启动 WebUI（传递池子管理器和订阅管理器）
 	ui := webui.New(store, cfg, poolMgr, customMgr, func() {
-		go smartFetchAndFill(fetch, validate, store, poolMgr)
+		refillSvc.Run(context.Background())
 	}, configChanged)
 	ui.Start()
 
@@ -109,11 +107,13 @@ func main() {
 		} else {
 			log.Println("[main] 🚀 启动初始化填充...")
 		}
-		smartFetchAndFill(fetch, validate, store, poolMgr)
+		refillSvc.Run(context.Background())
 	}()
 
 	// 启动状态监控协程
-	go startStatusMonitor(poolMgr, fetch, validate, store)
+	go startStatusMonitor(poolMgr, func() {
+		refillSvc.Run(context.Background())
+	})
 
 	// 启动健康检查器
 	healthChecker.StartBackground()
@@ -154,165 +154,8 @@ func main() {
 	}
 }
 
-// smartFetchAndFill 智能抓取和填充
-func smartFetchAndFill(fetch *fetcher.Fetcher, validate *validator.Validator, store *storage.Storage, poolMgr *pool.Manager) {
-	// 防止并发执行
-	if !fetchRunning.CompareAndSwap(false, true) {
-		log.Println("[main] 抓取已在运行，跳过")
-		return
-	}
-	defer fetchRunning.Store(false)
-
-	// 获取池子状态
-	status, err := poolMgr.GetStatus()
-	if err != nil {
-		log.Printf("[main] 获取池子状态失败: %v", err)
-		return
-	}
-
-	log.Printf("[main] 📊 池子状态: %s | HTTP=%d/%d SOCKS5=%d/%d 总计=%d/%d",
-		status.State, status.HTTP, status.HTTPSlots, status.SOCKS5, status.SOCKS5Slots,
-		status.Total, config.Get().PoolMaxSize)
-
-	// 判断是否需要抓取
-	needFetch, mode, preferredProtocol := poolMgr.NeedsFetch(status)
-	if !needFetch {
-		log.Println("[main] 池子健康，无需抓取")
-		return
-	}
-
-	log.Printf("[main] 🔍 智能抓取: 模式=%s 协议偏好=%s", mode, preferredProtocol)
-
-	// 智能抓取
-	candidates, err := fetch.FetchSmart(mode, preferredProtocol)
-	if err != nil {
-		log.Printf("[main] 抓取失败: %v", err)
-		return
-	}
-
-	// 按协议分组
-	var httpCandidates, socks5Candidates []storage.Proxy
-	for _, c := range candidates {
-		if c.Protocol == "http" {
-			httpCandidates = append(httpCandidates, c)
-		} else {
-			socks5Candidates = append(socks5Candidates, c)
-		}
-	}
-
-	log.Printf("[main] 抓取到 %d 个候选代理（SOCKS5=%d HTTP=%d），按协议并发验证...",
-		len(candidates), len(socks5Candidates), len(httpCandidates))
-
-	// 共享计数器
-	var addedCount atomic.Int32
-	var validCount atomic.Int32
-	var rejectedNoExit atomic.Int32
-	var rejectedLatency atomic.Int32
-	var rejectedGeo atomic.Int32
-	var rejectedFull atomic.Int32
-
-	// 入池处理函数（两个协程共用）
-	processResult := func(result validator.Result) {
-		if !result.Valid {
-			return
-		}
-
-		validCount.Add(1)
-		latencyMs := int(result.Latency.Milliseconds())
-
-		cfg := config.Get()
-		maxLatency := cfg.GetLatencyThreshold(status.State)
-
-		if result.ExitIP == "" || result.ExitLocation == "" {
-			rejectedNoExit.Add(1)
-			return
-		}
-
-		if latencyMs > maxLatency {
-			rejectedLatency.Add(1)
-			return
-		}
-
-		proxyToAdd := storage.Proxy{
-			Address:      result.Proxy.Address,
-			Protocol:     result.Proxy.Protocol,
-			ExitIP:       result.ExitIP,
-			ExitLocation: result.ExitLocation,
-			IPInfo:       result.IPInfo,
-			Latency:      latencyMs,
-		}
-
-		if added, reason := poolMgr.TryAddProxy(proxyToAdd); added {
-			addedCount.Add(1)
-		} else if reason == "slots_full" {
-			rejectedFull.Add(1)
-		} else if len(result.ExitLocation) >= 2 {
-			countryCode := result.ExitLocation[:2]
-			for _, blocked := range cfg.BlockedCountries {
-				if countryCode == blocked {
-					rejectedGeo.Add(1)
-					break
-				}
-			}
-		}
-	}
-
-	// 池子是否已满的检查函数
-	poolFilled := func() bool {
-		currentStatus, _ := poolMgr.GetStatus()
-		return !poolMgr.NeedsFetchQuick(currentStatus)
-	}
-
-	var wg sync.WaitGroup
-
-	// SOCKS5 协程：验证快，优先填充
-	if len(socks5Candidates) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			count := 0
-			for result := range validate.ValidateStream(socks5Candidates) {
-				processResult(result)
-				count++
-				if count%20 == 0 && poolFilled() {
-					log.Println("[main] ✅ SOCKS5 验证中检测到池子已满，停止")
-					break
-				}
-			}
-			log.Printf("[main] SOCKS5 验证完成，处理 %d 个", count)
-		}()
-	}
-
-	// HTTP 协程：有额外 HTTPS 检测，较慢
-	if len(httpCandidates) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			count := 0
-			for result := range validate.ValidateStream(httpCandidates) {
-				processResult(result)
-				count++
-				if count%20 == 0 && poolFilled() {
-					log.Println("[main] ✅ HTTP 验证中检测到池子已满，停止")
-					break
-				}
-			}
-			log.Printf("[main] HTTP 验证完成，处理 %d 个", count)
-		}()
-	}
-
-	wg.Wait()
-
-	// 最终状态
-	finalStatus, _ := poolMgr.GetStatus()
-	log.Printf("[main] 填充完成: 验证%d 通过%d 入池%d | 拒绝[无出口:%d 延迟:%d 地理:%d 满:%d] | 最终: %s HTTP=%d SOCKS5=%d",
-		len(candidates), validCount.Load(), addedCount.Load(),
-		rejectedNoExit.Load(), rejectedLatency.Load(), rejectedGeo.Load(), rejectedFull.Load(),
-		finalStatus.State, finalStatus.HTTP, finalStatus.SOCKS5)
-}
-
 // startStatusMonitor 状态监控协程
-func startStatusMonitor(poolMgr *pool.Manager, fetch *fetcher.Fetcher, validate *validator.Validator, store *storage.Storage) {
+func startStatusMonitor(poolMgr *pool.Manager, triggerFetch func()) {
 	ticker := time.NewTicker(30 * time.Second)
 	log.Println("[monitor] 📡 状态监控器已启动（每30秒检查）")
 
@@ -328,7 +171,7 @@ func startStatusMonitor(poolMgr *pool.Manager, fetch *fetcher.Fetcher, validate 
 			log.Printf("[monitor] ⚠️  检测到池子需求: 状态=%s 模式=%s 协议=%s",
 				status.State, mode, preferredProtocol)
 			// 触发智能填充
-			go smartFetchAndFill(fetch, validate, store, poolMgr)
+			go triggerFetch()
 		}
 	}
 }

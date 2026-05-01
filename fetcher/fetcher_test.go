@@ -3,6 +3,8 @@ package fetcher
 import (
 	"strings"
 	"testing"
+
+	"goproxy/storage"
 )
 
 func TestParseProxyListNormalizesProtocolsAndPorts(t *testing.T) {
@@ -41,5 +43,26 @@ bad-line
 		if p.Address != want[i].addr || p.Protocol != want[i].proto {
 			t.Fatalf("proxy[%d] = (%q, %q), want (%q, %q)", i, p.Address, p.Protocol, want[i].addr, want[i].proto)
 		}
+	}
+}
+
+func TestLimitProxyCandidates(t *testing.T) {
+	proxies := []storage.Proxy{
+		{Address: "1.1.1.1:80"},
+		{Address: "2.2.2.2:80"},
+		{Address: "3.3.3.3:80"},
+	}
+
+	limited := limitProxyCandidates(proxies, 2)
+	if len(limited) != 2 {
+		t.Fatalf("got %d proxies, want 2", len(limited))
+	}
+	if limited[0].Address != "1.1.1.1:80" || limited[1].Address != "2.2.2.2:80" {
+		t.Fatalf("unexpected limited proxies: %#v", limited)
+	}
+
+	unlimited := limitProxyCandidates(proxies, 0)
+	if len(unlimited) != len(proxies) {
+		t.Fatalf("limit 0 should keep all proxies, got %d", len(unlimited))
 	}
 }

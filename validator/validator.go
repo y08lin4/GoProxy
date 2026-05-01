@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -66,6 +67,10 @@ var httpsTestTargets = []string{
 // checkHTTPSConnect 通过 HTTP 代理实际访问一个随机 HTTPS 网站，验证 CONNECT 隧道是否可用
 // 首次失败会换一个目标重试一次，避免目标网站偶尔抽风导致误杀
 func checkHTTPSConnect(proxyAddr string, timeout time.Duration) bool {
+	return checkHTTPSConnectContext(context.Background(), proxyAddr, timeout)
+}
+
+func checkHTTPSConnectContext(ctx context.Context, proxyAddr string, timeout time.Duration) bool {
 	proxyURL, err := url.Parse(fmt.Sprintf("http://%s", proxyAddr))
 	if err != nil {
 		return false
@@ -84,7 +89,11 @@ func checkHTTPSConnect(proxyAddr string, timeout time.Duration) bool {
 
 	for attempt := 0; attempt < 2; attempt++ {
 		idx := (start + attempt) % len(httpsTestTargets)
-		resp, err := client.Get(httpsTestTargets[idx])
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpsTestTargets[idx], nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			continue
 		}
@@ -111,23 +120,50 @@ func (v *Validator) ValidateAll(proxies []storage.Proxy) []Result {
 
 // ValidateStream 并发验证，边验证边通过 channel 返回结果
 func (v *Validator) ValidateStream(proxies []storage.Proxy) <-chan Result {
+	return v.ValidateStreamContext(context.Background(), proxies)
+}
+
+// ValidateStreamContext validates proxies concurrently and stops dispatching/sending when ctx is canceled.
+func (v *Validator) ValidateStreamContext(ctx context.Context, proxies []storage.Proxy) <-chan Result {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ch := make(chan Result, concurrencyBuffer(len(proxies), v.concurrency))
 	sem := make(chan struct{}, v.concurrency)
 	var wg sync.WaitGroup
 
 	go func() {
+		defer func() {
+			wg.Wait()
+			close(ch)
+		}()
+
 		for _, p := range proxies {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+
 			wg.Add(1)
-			sem <- struct{}{}
 			go func(px storage.Proxy) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				valid, latency, exitIP, exitLocation, ipInfo := v.ValidateOne(px)
-				ch <- Result{Proxy: px, Valid: valid, Latency: latency, ExitIP: exitIP, ExitLocation: exitLocation, IPInfo: ipInfo}
+
+				valid, latency, exitIP, exitLocation, ipInfo := v.ValidateOneContext(ctx, px)
+				result := Result{Proxy: px, Valid: valid, Latency: latency, ExitIP: exitIP, ExitLocation: exitLocation, IPInfo: ipInfo}
+				select {
+				case ch <- result:
+				case <-ctx.Done():
+				}
 			}(p)
 		}
-		wg.Wait()
-		close(ch)
 	}()
 
 	return ch
@@ -135,6 +171,15 @@ func (v *Validator) ValidateStream(proxies []storage.Proxy) <-chan Result {
 
 // ValidateOne 验证单个代理是否可用，返回是否有效、延迟、出口IP、地理位置和 IPPure 画像
 func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, string, storage.IPInfo) {
+	return v.ValidateOneContext(context.Background(), p)
+}
+
+// ValidateOneContext validates a single proxy and binds outbound requests to ctx.
+func (v *Validator) ValidateOneContext(ctx context.Context, p storage.Proxy) (bool, time.Duration, string, string, storage.IPInfo) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var client *http.Client
 	var err error
 
@@ -153,7 +198,11 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 	}
 
 	start := time.Now()
-	resp, err := client.Get(v.validateURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.validateURL, nil)
+	if err != nil {
+		return false, 0, "", "", storage.IPInfo{}
+	}
+	resp, err := client.Do(req)
 	latency := time.Since(start)
 	if err != nil {
 		return false, 0, "", "", storage.IPInfo{}
@@ -172,6 +221,12 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 	}
 
 	// 获取出口 IP、地理位置和 IPPure 画像（仅在验证通过时）
+	select {
+	case <-ctx.Done():
+		return false, latency, "", "", storage.IPInfo{}
+	default:
+	}
+
 	exitIP, exitLocation, ipInfo := fetcher.GetExitIPInfo(client)
 
 	// 必须能获取到出口信息
@@ -206,7 +261,7 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 
 	// HTTP 代理额外检测：必须支持 HTTPS CONNECT 隧道
 	if p.Protocol == "http" {
-		if !checkHTTPSConnect(p.Address, v.timeout) {
+		if !checkHTTPSConnectContext(ctx, p.Address, v.timeout) {
 			return false, latency, exitIP, exitLocation, ipInfo
 		}
 	}

@@ -91,15 +91,17 @@ var slowUpdateSources = []Source{
 var allSources = append(fastUpdateSources, slowUpdateSources...)
 
 type Fetcher struct {
-	sources       []Source
-	client        *http.Client
-	sourceManager *SourceManager
+	sources                []Source
+	client                 *http.Client
+	sourceManager          *SourceManager
+	maxCandidatesPerSource int
 }
 
-func New(httpURL, socks5URL string, sourceManager *SourceManager) *Fetcher {
+func New(httpURL, socks5URL string, sourceManager *SourceManager, maxCandidatesPerSource int) *Fetcher {
 	return &Fetcher{
-		sources:       allSources,
-		sourceManager: sourceManager,
+		sources:                allSources,
+		sourceManager:          sourceManager,
+		maxCandidatesPerSource: maxCandidatesPerSource,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -200,6 +202,7 @@ func (f *Fetcher) fetchFromSources(sources []Source) ([]storage.Proxy, error) {
 			}
 			continue
 		}
+		r.proxies = limitProxyCandidates(r.proxies, f.maxCandidatesPerSource)
 
 		// 记录成功
 		if f.sourceManager != nil {
@@ -249,6 +252,7 @@ func (f *Fetcher) Fetch() ([]storage.Proxy, error) {
 			log.Printf("fetch %s error: %v", r.source.URL, r.err)
 			continue
 		}
+		r.proxies = limitProxyCandidates(r.proxies, f.maxCandidatesPerSource)
 		// 去重
 		var deduped []storage.Proxy
 		for _, p := range r.proxies {
@@ -287,6 +291,13 @@ func (f *Fetcher) fetchFromURL(url, protocol string) ([]storage.Proxy, error) {
 	}
 
 	return parseProxyList(resp.Body, protocol)
+}
+
+func limitProxyCandidates(proxies []storage.Proxy, limit int) []storage.Proxy {
+	if limit <= 0 || len(proxies) <= limit {
+		return proxies
+	}
+	return proxies[:limit]
 }
 
 func parseProxyList(r io.Reader, protocol string) ([]storage.Proxy, error) {
