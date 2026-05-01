@@ -14,19 +14,21 @@ import (
 
 // SOCKS5Server SOCKS5 协议服务器
 type SOCKS5Server struct {
-	storage *storage.Storage
-	cfg     *config.Config
-	mode    string // "random" 或 "lowest-latency"
-	port    string
+	cfg      *config.Config
+	mode     string // "random" or "lowest-latency"
+	port     string
+	selector *Selector
+	reporter *FailureReporter
 }
 
-// NewSOCKS5 创建 SOCKS5 服务器
+// NewSOCKS5 creates a SOCKS5 server
 func NewSOCKS5(s *storage.Storage, cfg *config.Config, mode string, port string) *SOCKS5Server {
 	return &SOCKS5Server{
-		storage: s,
-		cfg:     cfg,
-		mode:    mode,
-		port:    port,
+		cfg:      cfg,
+		mode:     mode,
+		port:     port,
+		selector: NewSelector(s),
+		reporter: NewFailureReporter(s),
 	}
 }
 
@@ -41,7 +43,7 @@ func (s *SOCKS5Server) Start() error {
 		authStatus = fmt.Sprintf("需认证 (用户: %s)", s.cfg.ProxyAuthUsername)
 	}
 	log.Printf("socks5 server listening on %s [%s] [%s]", s.port, modeDesc, authStatus)
-	
+
 	listener, err := net.Listen("tcp", s.port)
 	if err != nil {
 		return err
@@ -78,9 +80,9 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	// 重试机制：只使用 SOCKS5 协议的上游代理（天然支持 HTTPS）
 	tried := []string{}
 	maxRetries := s.cfg.MaxRetry + 2 // 增加重试次数以应对质量差的代理
-	
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		p, err := s.selectSOCKS5Proxy(tried)
+		p, err := s.selector.Select(tried, "socks5", s.mode == "lowest-latency")
 		if err != nil {
 			log.Printf("[socks5] no available socks5 upstream proxy: %v", err)
 			s.sendSOCKS5Reply(clientConn, 0x01) // General failure
@@ -93,8 +95,7 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		upstreamConn, err := s.dialViaProxy(p, target)
 		if err != nil {
 			log.Printf("[socks5] dial %s via %s (%s) failed: %v, removing", target, p.Address, p.Protocol, err)
-			s.storage.RecordProxyUse(p.Address, false)
-			removeOrDisableProxy(s.storage, p)
+			s.reporter.Failure(p)
 			continue
 		}
 
@@ -104,13 +105,13 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 			return
 		}
 
-		s.storage.RecordProxyUse(p.Address, true)
+		s.reporter.Success(p)
 		log.Printf("[socks5] %s via %s established", target, p.Address)
 
 		// 双向转发数据
 		go io.Copy(upstreamConn, clientConn)
 		io.Copy(clientConn, upstreamConn)
-		
+
 		// 转发完成，关闭连接
 		upstreamConn.Close()
 		return
@@ -119,40 +120,6 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	// 所有重试都失败
 	s.sendSOCKS5Reply(clientConn, 0x01) // General failure
 	log.Printf("[socks5] all proxies failed for %s", target)
-}
-
-// selectSOCKS5Proxy 根据使用模式选择 SOCKS5 上游代理
-func (s *SOCKS5Server) selectSOCKS5Proxy(tried []string) (*storage.Proxy, error) {
-	cfg := config.Get()
-	sourceFilter := sourceFilterFromMode(cfg.CustomProxyMode)
-
-	// 混用 + 优先模式
-	if cfg.CustomProxyMode == "mixed" && (cfg.CustomPriority || cfg.CustomFreePriority) {
-		preferSource := "custom"
-		if cfg.CustomFreePriority {
-			preferSource = "free"
-		}
-		var p *storage.Proxy
-		var err error
-		if s.mode == "lowest-latency" {
-			p, err = s.storage.GetLowestLatencyByProtocolExcludeFiltered("socks5", tried, preferSource)
-		} else {
-			p, err = s.storage.GetRandomByProtocolExcludeFiltered("socks5", tried, preferSource)
-		}
-		if err == nil {
-			return p, nil
-		}
-		// fallback
-		if s.mode == "lowest-latency" {
-			return s.storage.GetLowestLatencyByProtocolExcludeFiltered("socks5", tried, "")
-		}
-		return s.storage.GetRandomByProtocolExcludeFiltered("socks5", tried, "")
-	}
-
-	if s.mode == "lowest-latency" {
-		return s.storage.GetLowestLatencyByProtocolExcludeFiltered("socks5", tried, sourceFilter)
-	}
-	return s.storage.GetRandomByProtocolExcludeFiltered("socks5", tried, sourceFilter)
 }
 
 // socks5Handshake 处理 SOCKS5 握手
@@ -348,10 +315,10 @@ func (s *SOCKS5Server) sendSOCKS5Reply(conn net.Conn, rep byte) error {
 	// [VER(1), REP(1), RSV(1), ATYP(1), BND.ADDR(variable), BND.PORT(2)]
 	// 简化：使用 0.0.0.0:0
 	reply := []byte{
-		0x05, // VER
-		rep,  // REP: 0x00=成功, 0x01=一般失败, 0x07=命令不支持, 0x08=地址类型不支持
-		0x00, // RSV
-		0x01, // ATYP: IPv4
+		0x05,       // VER
+		rep,        // REP: 0x00=成功, 0x01=一般失败, 0x07=命令不支持, 0x08=地址类型不支持
+		0x00,       // RSV
+		0x01,       // ATYP: IPv4
 		0, 0, 0, 0, // BND.ADDR: 0.0.0.0
 		0, 0, // BND.PORT: 0
 	}
@@ -362,7 +329,7 @@ func (s *SOCKS5Server) sendSOCKS5Reply(conn net.Conn, rep byte) error {
 // dialViaProxy 通过上游代理连接目标
 func (s *SOCKS5Server) dialViaProxy(p *storage.Proxy, target string) (net.Conn, error) {
 	timeout := time.Duration(s.cfg.ValidateTimeout) * time.Second
-	
+
 	switch p.Protocol {
 	case "http":
 		// 连接到 HTTP 代理
@@ -384,7 +351,7 @@ func (s *SOCKS5Server) dialViaProxy(p *storage.Proxy, target string) (net.Conn, 
 			return nil, fmt.Errorf("upstream proxy connect failed")
 		}
 		return conn, nil
-		
+
 	case "socks5":
 		// 使用 SOCKS5 代理
 		dialer := &net.Dialer{Timeout: timeout}
@@ -419,7 +386,7 @@ func (s *SOCKS5Server) dialViaProxy(p *storage.Proxy, target string) (net.Conn, 
 
 		// 构建请求
 		req := []byte{0x05, 0x01, 0x00} // VER, CMD=CONNECT, RSV
-		
+
 		// 判断是 IP 还是域名
 		if ip := net.ParseIP(host); ip != nil {
 			if ip4 := ip.To4(); ip4 != nil {

@@ -19,18 +19,20 @@ import (
 )
 
 type Server struct {
-	storage *storage.Storage
-	cfg     *config.Config
-	mode    string // "random" 或 "lowest-latency"
-	port    string
+	cfg      *config.Config
+	mode     string // "random" or "lowest-latency"
+	port     string
+	selector *Selector
+	reporter *FailureReporter
 }
 
 func New(s *storage.Storage, cfg *config.Config, mode string, port string) *Server {
 	return &Server{
-		storage: s,
-		cfg:     cfg,
-		mode:    mode,
-		port:    port,
+		cfg:      cfg,
+		mode:     mode,
+		port:     port,
+		selector: NewSelector(s),
+		reporter: NewFailureReporter(s),
 	}
 }
 
@@ -56,7 +58,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	
+
 	if r.Method == http.MethodConnect {
 		s.handleTunnel(w, r)
 	} else {
@@ -70,94 +72,39 @@ func (s *Server) checkAuth(r *http.Request) bool {
 	if auth == "" {
 		return false
 	}
-	
+
 	// 解析 Basic Auth
 	const prefix = "Basic "
 	if !strings.HasPrefix(auth, prefix) {
 		return false
 	}
-	
+
 	decoded, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
 	if err != nil {
 		return false
 	}
-	
+
 	credentials := strings.SplitN(string(decoded), ":", 2)
 	if len(credentials) != 2 {
 		return false
 	}
-	
+
 	username := credentials[0]
 	password := credentials[1]
-	
+
 	// 验证用户名和密码
 	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(s.cfg.ProxyAuthUsername)) == 1
 	passwordHash := fmt.Sprintf("%x", sha256.Sum256([]byte(password)))
 	passwordMatch := subtle.ConstantTimeCompare([]byte(passwordHash), []byte(s.cfg.ProxyAuthPasswordHash)) == 1
-	
+
 	return usernameMatch && passwordMatch
-}
-
-// selectProxy 根据使用模式和选择策略获取代理
-func (s *Server) selectProxy(tried []string, lowestLatency bool) (*storage.Proxy, error) {
-	cfg := config.Get()
-	sourceFilter := sourceFilterFromMode(cfg.CustomProxyMode)
-
-	// 混用 + 优先模式：先尝试优先源，无可用则 fallback 全部
-	if cfg.CustomProxyMode == "mixed" && (cfg.CustomPriority || cfg.CustomFreePriority) {
-		preferSource := "custom"
-		if cfg.CustomFreePriority {
-			preferSource = "free"
-		}
-		var p *storage.Proxy
-		var err error
-		if lowestLatency {
-			p, err = s.storage.GetLowestLatencyExcludeFiltered(tried, preferSource)
-		} else {
-			p, err = s.storage.GetRandomExcludeFiltered(tried, preferSource)
-		}
-		if err == nil {
-			return p, nil
-		}
-		// fallback 到全部
-		if lowestLatency {
-			return s.storage.GetLowestLatencyExcludeFiltered(tried, "")
-		}
-		return s.storage.GetRandomExcludeFiltered(tried, "")
-	}
-
-	if lowestLatency {
-		return s.storage.GetLowestLatencyExcludeFiltered(tried, sourceFilter)
-	}
-	return s.storage.GetRandomExcludeFiltered(tried, sourceFilter)
-}
-
-// removeOrDisableProxy 根据代理来源决定删除或禁用
-func removeOrDisableProxy(store *storage.Storage, p *storage.Proxy) {
-	if p.Source == "custom" {
-		store.DisableProxy(p.Address)
-	} else {
-		store.Delete(p.Address)
-	}
-}
-
-// sourceFilterFromMode 根据使用模式返回来源过滤值
-func sourceFilterFromMode(mode string) string {
-	switch mode {
-	case "custom_only":
-		return "custom"
-	case "free_only":
-		return "free"
-	default:
-		return "" // mixed
-	}
 }
 
 // handleHTTP 处理普通 HTTP 请求（带自动重试）
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var tried []string
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
-		p, err := s.selectProxy(tried, s.mode == "lowest-latency")
+		p, err := s.selector.Select(tried, "", s.mode == "lowest-latency")
 		if err != nil {
 			http.Error(w, "no available proxy", http.StatusServiceUnavailable)
 			return
@@ -167,7 +114,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 		client, err := s.buildClient(p)
 		if err != nil {
-			removeOrDisableProxy(s.storage, p)
+			s.reporter.Remove(p)
 			continue
 		}
 
@@ -182,8 +129,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[proxy] %s via %s failed, removing", r.RequestURI, p.Address)
-			s.storage.RecordProxyUse(p.Address, false)
-			removeOrDisableProxy(s.storage, p)
+			s.reporter.Failure(p)
 			continue
 		}
 		defer resp.Body.Close()
@@ -196,7 +142,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
-		s.storage.RecordProxyUse(p.Address, true)
+		s.reporter.Success(p)
 		if resp.StatusCode == 429 {
 			log.Printf("[proxy] ⚠️  429 %s via %s (protocol=%s)", r.RequestURI, p.Address, p.Protocol)
 		} else {
@@ -212,7 +158,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	var tried []string
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
-		p, err := s.selectProxy(tried, s.mode == "lowest-latency")
+		p, err := s.selector.Select(tried, "", s.mode == "lowest-latency")
 		if err != nil {
 			http.Error(w, "no available proxy", http.StatusServiceUnavailable)
 			return
@@ -223,12 +169,11 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		conn, err := s.dialViaProxy(p, r.Host)
 		if err != nil {
 			log.Printf("[tunnel] dial %s via %s failed, removing", r.Host, p.Address)
-			s.storage.RecordProxyUse(p.Address, false)
-			removeOrDisableProxy(s.storage, p)
+			s.reporter.Failure(p)
 			continue
 		}
 
-		s.storage.RecordProxyUse(p.Address, true)
+		s.reporter.Success(p)
 
 		// 告知客户端隧道建立
 		hijacker, ok := w.(http.Hijacker)
