@@ -1,7 +1,9 @@
 package webui
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,18 +22,30 @@ import (
 	"goproxy/validator"
 )
 
-// 简单内存 session
+// in-memory sessions
 var (
 	sessions   = make(map[string]time.Time)
 	sessionsMu sync.Mutex
 )
 
-func newSession() string {
-	token := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano()))))
+const (
+	sessionTTL                 = 24 * time.Hour
+	maxSubscriptionUploadBytes = 10 << 20 // 10 MiB
+)
+
+func newSession() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(buf)
+	now := time.Now()
+
 	sessionsMu.Lock()
-	sessions[token] = time.Now().Add(24 * time.Hour)
+	cleanupExpiredSessionsLocked(now)
+	sessions[token] = now.Add(sessionTTL)
 	sessionsMu.Unlock()
-	return token
+	return token, nil
 }
 
 func validSession(r *http.Request) bool {
@@ -39,10 +53,46 @@ func validSession(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
+
+	now := time.Now()
 	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+
 	expiry, ok := sessions[cookie.Value]
-	sessionsMu.Unlock()
-	return ok && time.Now().Before(expiry)
+	if !ok {
+		return false
+	}
+	if !now.Before(expiry) {
+		delete(sessions, cookie.Value)
+		return false
+	}
+	return true
+}
+
+func cleanupExpiredSessionsLocked(now time.Time) {
+	for token, expiry := range sessions {
+		if !now.Before(expiry) {
+			delete(sessions, token)
+		}
+	}
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    token,
+		Path:     "/",
+		Expires:  expires,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+	})
+}
+
+func decodeJSONLimited(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	return json.NewDecoder(r.Body).Decode(dst)
 }
 
 type FetchTrigger func()
@@ -159,14 +209,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, loginHTMLWithError)
 		return
 	}
-	token := newSession()
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session",
-		Value:    token,
-		Path:     "/",
-		Expires:  time.Now().Add(24 * time.Hour),
-		HttpOnly: true,
-	})
+	token, err := newSession()
+	if err != nil {
+		http.Error(w, "create session failed", http.StatusInternalServerError)
+		return
+	}
+	setSessionCookie(w, r, token, 0, time.Now().Add(sessionTTL))
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -176,7 +224,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		delete(sessions, cookie.Value)
 		sessionsMu.Unlock()
 	}
-	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
+	setSessionCookie(w, r, "", -1, time.Now().Add(-time.Hour))
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
@@ -582,7 +630,7 @@ func (s *Server) apiSubscriptionContribute(w http.ResponseWriter, r *http.Reques
 		URL         string `json:"url"`
 		FileContent string `json:"file_content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONLimited(w, r, &req, maxSubscriptionUploadBytes); err != nil {
 		jsonError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -671,7 +719,7 @@ func (s *Server) apiSubscriptionAdd(w http.ResponseWriter, r *http.Request) {
 		FileContent string `json:"file_content"` // 上传的文件内容（Base64 编码）
 		RefreshMin  int    `json:"refresh_min"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONLimited(w, r, &req, maxSubscriptionUploadBytes); err != nil {
 		jsonError(w, "invalid request", http.StatusBadRequest)
 		return
 	}

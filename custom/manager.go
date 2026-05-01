@@ -1,7 +1,6 @@
 package custom
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +17,8 @@ import (
 	"goproxy/storage"
 	"goproxy/validator"
 )
+
+const maxSubscriptionFetchBytes = 10 << 20 // 10 MiB
 
 // Manager 订阅管理器
 type Manager struct {
@@ -412,12 +413,18 @@ func (m *Manager) fetchWithRetry(urlStr string) ([]byte, error) {
 
 // fetchURL 通过指定代理（或直连）拉取 URL 内容
 func (m *Manager) fetchURL(urlStr string, p *storage.Proxy) ([]byte, error) {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported subscription URL scheme: %s", parsedURL.Scheme)
+	}
+
 	transport := &http.Transport{}
 
 	if p != nil {
-		// 通过代理访问时跳过 TLS 验证（免费代理可能 MITM）
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-
+		// Route subscription fetch through the selected proxy.
 		switch p.Protocol {
 		case "socks5":
 			dialer, err := proxy.SOCKS5("tcp", p.Address, nil, proxy.Direct)
@@ -452,7 +459,19 @@ func (m *Manager) fetchURL(urlStr string, p *storage.Proxy) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	return readSubscriptionResponse(resp.Body)
+}
+
+func readSubscriptionResponse(r io.Reader) ([]byte, error) {
+	limited := &io.LimitedReader{R: r, N: maxSubscriptionFetchBytes + 1}
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxSubscriptionFetchBytes {
+		return nil, fmt.Errorf("subscription response exceeds %d bytes", maxSubscriptionFetchBytes)
+	}
+	return data, nil
 }
 
 // validateCustomProxies 验证订阅代理，返回可用数
