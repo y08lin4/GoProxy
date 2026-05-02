@@ -40,6 +40,7 @@
 
 - 新增 `ProxyAdminService`、`SubscriptionAdminService`、`SourceAdminService` 单元测试，覆盖分页、订阅编排、贡献标记、刷新触发和源状态聚合逻辑。
 - 新增 `webui/server_api_test.go`，覆盖代理分页接口、配置保存、源配置回读和权限中间件等集成测试骨架。
+- 扩展 `webui/server_api_test.go`，覆盖订阅列表、访客贡献、添加订阅、删除、刷新、批量刷新和状态切换等订阅流程接口。
 
 ## [refactor/decouple-core] - 2026-05-02
 
