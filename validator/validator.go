@@ -14,7 +14,6 @@ import (
 	"goproxy/config"
 	"goproxy/internal/domain"
 	"goproxy/internal/ports"
-	"goproxy/storage"
 )
 
 type Validator struct {
@@ -110,7 +109,7 @@ func checkHTTPSConnectContext(ctx context.Context, proxyAddr string, timeout tim
 }
 
 // ValidateAll 并发验证所有代理，返回验证结果
-func (v *Validator) ValidateAll(proxies []storage.Proxy) []Result {
+func (v *Validator) ValidateAll(proxies []domain.Proxy) []Result {
 	var results []Result
 	for r := range v.ValidateStream(proxies) {
 		results = append(results, r)
@@ -119,12 +118,12 @@ func (v *Validator) ValidateAll(proxies []storage.Proxy) []Result {
 }
 
 // ValidateStream 并发验证，边验证边通过 channel 返回结果
-func (v *Validator) ValidateStream(proxies []storage.Proxy) <-chan Result {
+func (v *Validator) ValidateStream(proxies []domain.Proxy) <-chan Result {
 	return v.ValidateStreamContext(context.Background(), proxies)
 }
 
 // ValidateStreamContext validates proxies concurrently and stops dispatching/sending when ctx is canceled.
-func (v *Validator) ValidateStreamContext(ctx context.Context, proxies []storage.Proxy) <-chan Result {
+func (v *Validator) ValidateStreamContext(ctx context.Context, proxies []domain.Proxy) <-chan Result {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -152,7 +151,7 @@ func (v *Validator) ValidateStreamContext(ctx context.Context, proxies []storage
 			}
 
 			wg.Add(1)
-			go func(px storage.Proxy) {
+			go func(px domain.Proxy) {
 				defer wg.Done()
 				defer func() { <-sem }()
 
@@ -170,12 +169,12 @@ func (v *Validator) ValidateStreamContext(ctx context.Context, proxies []storage
 }
 
 // ValidateOne 验证单个代理是否可用，返回是否有效、延迟、出口IP、地理位置和 IPPure 画像
-func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, string, storage.IPInfo) {
+func (v *Validator) ValidateOne(p domain.Proxy) (bool, time.Duration, string, string, domain.IPInfo) {
 	return v.ValidateOneContext(context.Background(), p)
 }
 
 // ValidateOneContext validates a single proxy and binds outbound requests to ctx.
-func (v *Validator) ValidateOneContext(ctx context.Context, p storage.Proxy) (bool, time.Duration, string, string, storage.IPInfo) {
+func (v *Validator) ValidateOneContext(ctx context.Context, p domain.Proxy) (bool, time.Duration, string, string, domain.IPInfo) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -190,45 +189,45 @@ func (v *Validator) ValidateOneContext(ctx context.Context, p storage.Proxy) (bo
 		client, err = newSOCKS5Client(p.Address, v.timeout)
 	default:
 		log.Printf("unknown protocol %s for %s", p.Protocol, p.Address)
-		return false, 0, "", "", storage.IPInfo{}
+		return false, 0, "", "", domain.IPInfo{}
 	}
 
 	if err != nil {
-		return false, 0, "", "", storage.IPInfo{}
+		return false, 0, "", "", domain.IPInfo{}
 	}
 
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.validateURL, nil)
 	if err != nil {
-		return false, 0, "", "", storage.IPInfo{}
+		return false, 0, "", "", domain.IPInfo{}
 	}
 	resp, err := client.Do(req)
 	latency := time.Since(start)
 	if err != nil {
-		return false, 0, "", "", storage.IPInfo{}
+		return false, 0, "", "", domain.IPInfo{}
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
 	// 验证状态码（200 或 204 都接受）
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return false, latency, "", "", storage.IPInfo{}
+		return false, latency, "", "", domain.IPInfo{}
 	}
 
 	// 响应时间过滤
 	if v.maxResponseMs > 0 && latency > time.Duration(v.maxResponseMs)*time.Millisecond {
-		return false, latency, "", "", storage.IPInfo{}
+		return false, latency, "", "", domain.IPInfo{}
 	}
 
 	// 获取出口 IP、地理位置和 IPPure 画像（仅在验证通过时）
 	select {
 	case <-ctx.Done():
-		return false, latency, "", "", storage.IPInfo{}
+		return false, latency, "", "", domain.IPInfo{}
 	default:
 	}
 
 	if v.geoIP == nil {
-		return false, latency, "", "", storage.IPInfo{}
+		return false, latency, "", "", domain.IPInfo{}
 	}
 	exitIP, exitLocation, ipInfo := v.geoIP.Resolve(ctx, client)
 

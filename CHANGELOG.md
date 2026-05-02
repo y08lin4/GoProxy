@@ -7,6 +7,12 @@
 ### 新增
 
 - 从 Proxyfind 目录筛选并验证更多纯文本代理源，扩充 OpenProxyList、ProxySpace、Jetkai、ShiftyTR、ErcinDedeoglu 等来源。
+- 新增 `internal/ports.ProxyPoolStore`，为代理池管理建立存储接口边界。
+
+### 变更
+
+- `fetcher` 和 `validator` 的公开输入输出改为使用 `internal/domain` 类型，减少对 `storage` 具体实现的依赖。
+- `pool.Manager` 改为依赖代理池存储接口，不再直接依赖 `*storage.Storage`。
 
 ### 重构
 

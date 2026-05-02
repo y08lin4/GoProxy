@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"goproxy/storage"
+	"goproxy/internal/domain"
 )
 
 func TestValidateStreamContextCanceledBeforeDispatch(t *testing.T) {
@@ -13,7 +13,7 @@ func TestValidateStreamContextCanceledBeforeDispatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	ch := v.ValidateStreamContext(ctx, []storage.Proxy{
+	ch := v.ValidateStreamContext(ctx, []domain.Proxy{
 		{Address: "127.0.0.1:1", Protocol: "http"},
 	})
 

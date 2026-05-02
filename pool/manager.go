@@ -5,17 +5,17 @@ import (
 
 	"goproxy/config"
 	"goproxy/internal/domain"
-	"goproxy/storage"
+	"goproxy/internal/ports"
 )
 
 // Manager coordinates pool persistence while delegating pure decisions to Policy.
 type Manager struct {
-	storage *storage.Storage
+	storage ports.ProxyPoolStore
 	cfg     *config.Config
 	policy  *Policy
 }
 
-func NewManager(s *storage.Storage, cfg *config.Config) *Manager {
+func NewManager(s ports.ProxyPoolStore, cfg *config.Config) *Manager {
 	return &Manager{
 		storage: s,
 		cfg:     cfg,
@@ -64,7 +64,7 @@ func (m *Manager) NeedsFetchQuick(status *PoolStatus) bool {
 }
 
 // TryAddProxy tries to add a validated proxy to the pool or replace a worse one.
-func (m *Manager) TryAddProxy(p storage.Proxy) (bool, string) {
+func (m *Manager) TryAddProxy(p domain.Proxy) (bool, string) {
 	// Custom subscription proxies bypass free-proxy slot limits.
 	if p.Source == "custom" {
 		if err := m.storage.AddProxyWithSource(p.Address, p.Protocol, "custom"); err != nil {
@@ -108,7 +108,7 @@ func (m *Manager) TryAddProxy(p storage.Proxy) (bool, string) {
 	return false, "slots_full"
 }
 
-func (m *Manager) tryReplace(newProxy storage.Proxy) (bool, string) {
+func (m *Manager) tryReplace(newProxy domain.Proxy) (bool, string) {
 	candidates, err := m.storage.GetWorstProxies(newProxy.Protocol, 10)
 	if err != nil || len(candidates) == 0 {
 		return false, "no_candidates"

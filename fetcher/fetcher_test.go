@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"goproxy/storage"
+	"goproxy/internal/domain"
 )
 
 func TestParseProxyListNormalizesProtocolsAndPorts(t *testing.T) {
@@ -47,7 +47,7 @@ bad-line
 }
 
 func TestLimitProxyCandidates(t *testing.T) {
-	proxies := []storage.Proxy{
+	proxies := []domain.Proxy{
 		{Address: "1.1.1.1:80"},
 		{Address: "2.2.2.2:80"},
 		{Address: "3.3.3.3:80"},

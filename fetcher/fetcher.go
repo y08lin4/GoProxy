@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"goproxy/internal/domain"
-	"goproxy/storage"
 )
 
 type Source = domain.Source
@@ -139,7 +138,7 @@ func New(httpURL, socks5URL string, sourceManager *SourceManager, maxCandidatesP
 }
 
 // FetchSmart 智能抓取：根据模式和协议需求选择源
-func (f *Fetcher) FetchSmart(mode string, preferredProtocol string) ([]storage.Proxy, error) {
+func (f *Fetcher) FetchSmart(mode string, preferredProtocol string) ([]domain.Proxy, error) {
 	var sources []Source
 
 	switch mode {
@@ -206,9 +205,9 @@ func (f *Fetcher) selectRandomSources(sources []Source, count int, preferredProt
 }
 
 // fetchFromSources 从指定源列表抓取
-func (f *Fetcher) fetchFromSources(sources []Source) ([]storage.Proxy, error) {
+func (f *Fetcher) fetchFromSources(sources []Source) ([]domain.Proxy, error) {
 	type result struct {
-		proxies []storage.Proxy
+		proxies []domain.Proxy
 		source  Source
 		err     error
 	}
@@ -221,7 +220,7 @@ func (f *Fetcher) fetchFromSources(sources []Source) ([]storage.Proxy, error) {
 		}(src)
 	}
 
-	var all []storage.Proxy
+	var all []domain.Proxy
 	seen := make(map[string]bool)
 	for range sources {
 		r := <-ch
@@ -240,7 +239,7 @@ func (f *Fetcher) fetchFromSources(sources []Source) ([]storage.Proxy, error) {
 		}
 
 		// 去重
-		var deduped []storage.Proxy
+		var deduped []domain.Proxy
 		for _, p := range r.proxies {
 			if !seen[p.Address] {
 				seen[p.Address] = true
@@ -259,9 +258,9 @@ func (f *Fetcher) fetchFromSources(sources []Source) ([]storage.Proxy, error) {
 }
 
 // Fetch 从所有来源并发抓取代理
-func (f *Fetcher) Fetch() ([]storage.Proxy, error) {
+func (f *Fetcher) Fetch() ([]domain.Proxy, error) {
 	type result struct {
-		proxies []storage.Proxy
+		proxies []domain.Proxy
 		source  Source
 		err     error
 	}
@@ -274,7 +273,7 @@ func (f *Fetcher) Fetch() ([]storage.Proxy, error) {
 		}(src)
 	}
 
-	var all []storage.Proxy
+	var all []domain.Proxy
 	seen := make(map[string]bool)
 	for range f.sources {
 		r := <-ch
@@ -284,7 +283,7 @@ func (f *Fetcher) Fetch() ([]storage.Proxy, error) {
 		}
 		r.proxies = limitProxyCandidates(r.proxies, f.maxCandidatesPerSource)
 		// 去重
-		var deduped []storage.Proxy
+		var deduped []domain.Proxy
 		for _, p := range r.proxies {
 			if !seen[p.Address] {
 				seen[p.Address] = true
@@ -302,7 +301,7 @@ func (f *Fetcher) Fetch() ([]storage.Proxy, error) {
 	return all, nil
 }
 
-func (f *Fetcher) fetchFromURL(url, protocol string) ([]storage.Proxy, error) {
+func (f *Fetcher) fetchFromURL(url, protocol string) ([]domain.Proxy, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("new request %s: %w", url, err)
@@ -323,15 +322,15 @@ func (f *Fetcher) fetchFromURL(url, protocol string) ([]storage.Proxy, error) {
 	return parseProxyList(resp.Body, protocol)
 }
 
-func limitProxyCandidates(proxies []storage.Proxy, limit int) []storage.Proxy {
+func limitProxyCandidates(proxies []domain.Proxy, limit int) []domain.Proxy {
 	if limit <= 0 || len(proxies) <= limit {
 		return proxies
 	}
 	return proxies[:limit]
 }
 
-func parseProxyList(r io.Reader, protocol string) ([]storage.Proxy, error) {
-	var proxies []storage.Proxy
+func parseProxyList(r io.Reader, protocol string) ([]domain.Proxy, error) {
+	var proxies []domain.Proxy
 	defaultProtocol := normalizeProtocol(protocol)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
@@ -354,7 +353,7 @@ func parseProxyList(r io.Reader, protocol string) ([]storage.Proxy, error) {
 		if !ok {
 			continue
 		}
-		proxies = append(proxies, storage.Proxy{
+		proxies = append(proxies, domain.Proxy{
 			Address:  addr,
 			Protocol: proto,
 		})
