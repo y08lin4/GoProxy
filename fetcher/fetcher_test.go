@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"goproxy/config"
 	"goproxy/internal/domain"
 )
 
@@ -82,6 +83,36 @@ func TestBuiltInSourcesAreUniqueAndSupported(t *testing.T) {
 		case "http", "socks5":
 		default:
 			t.Fatalf("source %s uses unsupported protocol %q", source.URL, source.Protocol)
+		}
+	}
+}
+
+func TestSourceCatalogMergesExtraSourcesAndDisabledURLs(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ExtraSources = []domain.FetchSourceConfig{
+		{URL: "https://example.com/http.txt", Protocol: "http", Group: "slow"},
+		{URL: "https://example.com/socks5.txt", Protocol: "socks5", Group: "fast"},
+		{URL: fastUpdateSources[0].URL, Protocol: "http", Group: "fast"}, // duplicate built-in
+	}
+	cfg.DisabledSourceURLs = []string{fastUpdateSources[0].URL}
+
+	fetcher := New("", "", nil, 100, config.StaticProvider{Config: cfg})
+	catalog := fetcher.SourceCatalog()
+
+	foundExtra := false
+	for _, src := range catalog {
+		if src.URL == "https://example.com/http.txt" && src.Protocol == "http" && src.Group == "slow" {
+			foundExtra = true
+		}
+	}
+	if !foundExtra {
+		t.Fatalf("extra source missing from catalog: %#v", catalog)
+	}
+
+	fastSources, _, _ := fetcher.activeSources()
+	for _, src := range fastSources {
+		if src.URL == fastUpdateSources[0].URL {
+			t.Fatalf("disabled source %s should not be active", src.URL)
 		}
 	}
 }

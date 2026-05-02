@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"goproxy/config"
 	"goproxy/internal/domain"
 )
 
@@ -120,45 +121,156 @@ var slowUpdateSources = []Source{
 var allSources = append(fastUpdateSources, slowUpdateSources...)
 
 type Fetcher struct {
-	sources                []Source
 	client                 *http.Client
 	sourceManager          *SourceManager
 	maxCandidatesPerSource int
+	config                 config.Provider
 }
 
-func New(httpURL, socks5URL string, sourceManager *SourceManager, maxCandidatesPerSource int) *Fetcher {
+func New(httpURL, socks5URL string, sourceManager *SourceManager, maxCandidatesPerSource int, providers ...config.Provider) *Fetcher {
+	provider := config.Provider(config.GlobalProvider{})
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
+	}
 	return &Fetcher{
-		sources:                allSources,
 		sourceManager:          sourceManager,
 		maxCandidatesPerSource: maxCandidatesPerSource,
+		config:                 provider,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
+func (f *Fetcher) configSnapshot() *config.Config {
+	if f != nil && f.config != nil {
+		return f.config.Get()
+	}
+	return config.DefaultConfig()
+}
+
+func normalizeSourceGroup(group string) string {
+	switch strings.ToLower(strings.TrimSpace(group)) {
+	case "fast":
+		return "fast"
+	default:
+		return "slow"
+	}
+}
+
+func normalizeConfiguredSource(src domain.FetchSourceConfig) (domain.FetchSourceConfig, bool) {
+	protocol := normalizeProtocol(src.Protocol)
+	url := strings.TrimSpace(src.URL)
+	if url == "" || protocol == "" {
+		return domain.FetchSourceConfig{}, false
+	}
+	return domain.FetchSourceConfig{
+		URL:      url,
+		Protocol: protocol,
+		Group:    normalizeSourceGroup(src.Group),
+	}, true
+}
+
+func sourceConfigsToSources(configs []domain.FetchSourceConfig) []Source {
+	sources := make([]Source, 0, len(configs))
+	for _, cfg := range configs {
+		sources = append(sources, Source{URL: cfg.URL, Protocol: cfg.Protocol})
+	}
+	return sources
+}
+
+func dedupeSourceConfigs(configs []domain.FetchSourceConfig) []domain.FetchSourceConfig {
+	seen := make(map[string]struct{}, len(configs))
+	deduped := make([]domain.FetchSourceConfig, 0, len(configs))
+	for _, cfg := range configs {
+		url := strings.TrimSpace(cfg.URL)
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		deduped = append(deduped, cfg)
+	}
+	return deduped
+}
+
+func builtinSourceCatalog() []domain.FetchSourceConfig {
+	catalog := make([]domain.FetchSourceConfig, 0, len(fastUpdateSources)+len(slowUpdateSources))
+	for _, src := range fastUpdateSources {
+		catalog = append(catalog, domain.FetchSourceConfig{URL: src.URL, Protocol: src.Protocol, Group: "fast"})
+	}
+	for _, src := range slowUpdateSources {
+		catalog = append(catalog, domain.FetchSourceConfig{URL: src.URL, Protocol: src.Protocol, Group: "slow"})
+	}
+	return catalog
+}
+
+// SourceCatalog returns the effective configured source catalog before disabled URLs are filtered.
+func (f *Fetcher) SourceCatalog() []domain.FetchSourceConfig {
+	catalog := builtinSourceCatalog()
+	cfg := f.configSnapshot()
+	for _, extra := range cfg.ExtraSources {
+		if normalized, ok := normalizeConfiguredSource(extra); ok {
+			catalog = append(catalog, normalized)
+		}
+	}
+	return dedupeSourceConfigs(catalog)
+}
+
+func (f *Fetcher) activeSources() (fast []Source, slow []Source, all []Source) {
+	disabled := make(map[string]struct{})
+	for _, url := range f.configSnapshot().DisabledSourceURLs {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
+		}
+		disabled[url] = struct{}{}
+	}
+
+	fastCfg := make([]domain.FetchSourceConfig, 0)
+	slowCfg := make([]domain.FetchSourceConfig, 0)
+	for _, src := range f.SourceCatalog() {
+		if _, ok := disabled[src.URL]; ok {
+			continue
+		}
+		if normalizeSourceGroup(src.Group) == "fast" {
+			fastCfg = append(fastCfg, src)
+		} else {
+			slowCfg = append(slowCfg, src)
+		}
+	}
+
+	fast = sourceConfigsToSources(fastCfg)
+	slow = sourceConfigsToSources(slowCfg)
+	all = append(append([]Source{}, fast...), slow...)
+	return fast, slow, all
+}
+
 // FetchSmart 智能抓取：根据模式和协议需求选择源
 func (f *Fetcher) FetchSmart(mode string, preferredProtocol string) ([]domain.Proxy, error) {
 	var sources []Source
+	fastSources, slowSources, runtimeSources := f.activeSources()
 
 	switch mode {
 	case "emergency":
 		// 紧急模式：忽略断路器，强制使用所有源（包括被禁用的）
-		sources = f.filterAvailableSources(allSources, preferredProtocol, true)
+		sources = f.filterAvailableSources(runtimeSources, preferredProtocol, true)
 		log.Printf("[fetch] 🚨 紧急模式: 使用 %d 个源（忽略断路器）", len(sources))
 
 	case "refill":
 		// 补充模式：使用快更新源
-		sources = f.filterAvailableSources(fastUpdateSources, preferredProtocol, false)
+		sources = f.filterAvailableSources(fastSources, preferredProtocol, false)
 		log.Printf("[fetch] 🔄 补充模式: 使用 %d 个快更新源", len(sources))
 
 	case "optimize":
 		// 优化模式：随机选择2-3个慢更新源
-		sources = f.selectRandomSources(slowUpdateSources, 3, preferredProtocol)
+		sources = f.selectRandomSources(slowSources, 3, preferredProtocol)
 		log.Printf("[fetch] ⚡ 优化模式: 使用 %d 个源", len(sources))
 
 	default:
-		sources = f.filterAvailableSources(fastUpdateSources, preferredProtocol, false)
+		sources = f.filterAvailableSources(fastSources, preferredProtocol, false)
 	}
 
 	if len(sources) == 0 {
@@ -265,8 +377,9 @@ func (f *Fetcher) Fetch() ([]domain.Proxy, error) {
 		err     error
 	}
 
-	ch := make(chan result, len(f.sources))
-	for _, src := range f.sources {
+	_, _, runtimeSources := f.activeSources()
+	ch := make(chan result, len(runtimeSources))
+	for _, src := range runtimeSources {
 		go func(s Source) {
 			proxies, err := f.fetchFromURL(s.URL, s.Protocol)
 			ch <- result{proxies: proxies, source: s, err: err}
@@ -275,7 +388,7 @@ func (f *Fetcher) Fetch() ([]domain.Proxy, error) {
 
 	var all []domain.Proxy
 	seen := make(map[string]bool)
-	for range f.sources {
+	for range runtimeSources {
 		r := <-ch
 		if r.err != nil {
 			log.Printf("fetch %s error: %v", r.source.URL, r.err)

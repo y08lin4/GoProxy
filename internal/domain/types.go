@@ -84,6 +84,13 @@ type RefreshTaskStatus struct {
 	ValidCount     int       `json:"valid_count,omitempty"`
 }
 
+// FetchSourceConfig describes one configurable upstream proxy-list source.
+type FetchSourceConfig struct {
+	URL      string `json:"url"`
+	Protocol string `json:"protocol"`
+	Group    string `json:"group"` // fast / slow
+}
+
 // SourceStatus records fetch source health/circuit-breaker state.
 type SourceStatus struct {
 	ID               int64
@@ -95,6 +102,24 @@ type SourceStatus struct {
 	LastFail         time.Time
 	Status           string
 	DisabledUntil    time.Time
+}
+
+// SourceRuntimeStatus combines configured source metadata and runtime health stats.
+type SourceRuntimeStatus struct {
+	URL              string    `json:"url"`
+	Protocol         string    `json:"protocol"`
+	Group            string    `json:"group"`
+	Status           string    `json:"status"`
+	Enabled          bool      `json:"enabled"`
+	BuiltIn          bool      `json:"built_in"`
+	SuccessCount     int       `json:"success_count"`
+	FailCount        int       `json:"fail_count"`
+	ConsecutiveFails int       `json:"consecutive_fails"`
+	LastSuccess      time.Time `json:"last_success,omitempty"`
+	LastFail         time.Time `json:"last_fail,omitempty"`
+	DisabledUntil    time.Time `json:"disabled_until,omitempty"`
+	SuccessRate      float64   `json:"success_rate"`
+	HealthScore      int       `json:"health_score"`
 }
 
 // Source describes an upstream proxy list source.

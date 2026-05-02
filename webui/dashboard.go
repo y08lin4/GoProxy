@@ -295,6 +295,13 @@ thead{background:#f9fafb;border-bottom:1px solid var(--border);box-shadow:none}t
         <div id="sub-status" style="margin-top:8px;font-size:10px;color:var(--fg-dim)"></div>
       </div>
 
+      <div class="control-panel" style="margin-bottom:20px">
+        <div class="control-header">
+          <div class="control-title">[ FETCH_SOURCES ]</div>
+        </div>
+        <div id="source-list" style="font-size:11px;max-height:220px;overflow-y:auto"></div>
+      </div>
+
       <!-- 免费代理池 -->
       <div style="font-size:8px;color:var(--fg-dim);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:2px;font-weight:600" data-i18n="health.free_pool">[ FREE_POOL ]</div>
       <div class="health-grid">
@@ -467,6 +474,22 @@ thead{background:#f9fafb;border-bottom:1px solid var(--border);box-shadow:none}t
         <div class="form-group">
           <label data-i18n="config.health_batch">每批数量</label>
           <input type="number" id="cfg-health-batch" min="10" max="100" step="10">
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title" data-i18n="config.section_sources">代理源配置</div>
+      <div class="form-grid">
+        <div class="form-group" style="grid-column:1/-1">
+          <label data-i18n="config.extra_sources">额外代理源</label>
+          <textarea id="cfg-extra-sources" rows="6" placeholder="slow http https://example.com/http.txt&#10;fast socks5 https://example.com/socks5.txt" style="width:100%;padding:10px;background:var(--bg-card);border:1px solid var(--border);color:var(--fg);font-family:var(--mono);font-size:12px;resize:vertical"></textarea>
+          <div class="form-help" data-i18n="config.extra_sources_help">每行一个源，格式：group protocol url，例如：slow http https://example.com/list.txt</div>
+        </div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label data-i18n="config.disabled_sources">禁用源 URL</label>
+          <textarea id="cfg-disabled-source-urls" rows="5" placeholder="https://example.com/list.txt" style="width:100%;padding:10px;background:var(--bg-card);border:1px solid var(--border);color:var(--fg);font-family:var(--mono);font-size:12px;resize:vertical"></textarea>
+          <div class="form-help" data-i18n="config.disabled_sources_help">每行一个 URL，用于临时停用内置或额外源。</div>
         </div>
       </div>
     </div>
@@ -659,10 +682,15 @@ const i18n = {
     'config.latency_healthy': '健康模式',
     'config.latency_emergency': '紧急模式',
     'config.section_validation': '验证与健康检查',
+    'config.section_sources': '代理源配置',
     'config.validate_concurrency': '验证并发数',
     'config.validate_timeout': '验证超时(秒)',
     'config.health_interval': '检查间隔(分钟)',
     'config.health_batch': '每批数量',
+    'config.extra_sources': '额外代理源',
+    'config.extra_sources_help': '每行格式：group protocol url，例如：slow http https://example.com/list.txt',
+    'config.disabled_sources': '禁用源 URL',
+    'config.disabled_sources_help': '每行一个 URL，可临时停用内置或额外源',
     'config.section_optimization': '优化设置',
     'config.optimize_interval': '优化间隔(分钟)',
     'config.replace_threshold': '替换阈值',
@@ -729,6 +757,13 @@ const i18n = {
     'sub.task_validating': '验证中',
     'sub.task_success': '已完成',
     'sub.task_failed': '失败',
+    'source.empty': '暂无源状态',
+    'source.status.idle': '待使用',
+    'source.status.active': '正常',
+    'source.status.degraded': '降级',
+    'source.status.disabled': '禁用',
+    'source.success_rate': '成功率',
+    'source.health_score': '健康分',
     // 添加订阅弹窗
     'sub.add_title': '添加订阅',
     'sub.name': '名称',
@@ -830,10 +865,15 @@ const i18n = {
     'config.latency_healthy': 'Healthy',
     'config.latency_emergency': 'Emergency',
     'config.section_validation': 'Validation & Health Check',
+    'config.section_sources': 'Source Configuration',
     'config.validate_concurrency': 'Validate Concurrency',
     'config.validate_timeout': 'Validate Timeout (s)',
     'config.health_interval': 'Health Check Interval (min)',
     'config.health_batch': 'Batch Size',
+    'config.extra_sources': 'Extra Sources',
+    'config.extra_sources_help': 'One per line: group protocol url, e.g. slow http https://example.com/list.txt',
+    'config.disabled_sources': 'Disabled Source URLs',
+    'config.disabled_sources_help': 'One URL per line to temporarily disable built-in or extra sources.',
     'config.section_optimization': 'Optimization',
     'config.optimize_interval': 'Optimize Interval (min)',
     'config.replace_threshold': 'Replace Threshold',
@@ -897,6 +937,13 @@ const i18n = {
     'sub.task_validating': 'Validating',
     'sub.task_success': 'Done',
     'sub.task_failed': 'Failed',
+    'source.empty': 'No source stats yet',
+    'source.status.idle': 'Idle',
+    'source.status.active': 'Active',
+    'source.status.degraded': 'Degraded',
+    'source.status.disabled': 'Disabled',
+    'source.success_rate': 'Success',
+    'source.health_score': 'Health',
     'sub.add_title': 'Add Subscription',
     'sub.name': 'Name',
     'sub.import_mode': 'Import Mode',
@@ -1353,6 +1400,66 @@ async function deleteProxy(addr) {
   loadProxies();
 }
 
+function formatSourceConfigs(sources) {
+  return (sources || []).map(src => {
+    const group = src.group || 'slow';
+    return [group, src.protocol, src.url].filter(Boolean).join(' ');
+  }).join('\n');
+}
+
+function parseSourceConfigs(text) {
+  return String(text || '').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#')).map(line => {
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) return null;
+    let group = 'slow';
+    let protocol = '';
+    let url = '';
+    if (parts.length >= 3) {
+      group = parts.shift();
+    }
+    protocol = parts.shift();
+    url = parts.join(' ');
+    if (!url) return null;
+    return {group, protocol, url};
+  }).filter(Boolean);
+}
+
+function parseDisabledSourceUrls(text) {
+  return String(text || '').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+}
+
+async function loadSourceStats() {
+  const stats = await api('/api/sources/status');
+  const el = document.getElementById('source-list');
+  if (!el || !stats) return;
+
+  if (stats.length === 0) {
+    el.innerHTML = '<div style="color:var(--gray-5);text-align:center;padding:8px">' + t('source.empty') + '</div>';
+    return;
+  }
+
+  el.innerHTML = stats.slice(0, 12).map(src => {
+    const statusKey = 'source.status.' + (src.status || 'idle');
+    const statusLabel = t(statusKey);
+    const color = src.status === 'disabled' ? 'var(--red)' : (src.status === 'degraded' ? 'var(--yellow)' : 'var(--green)');
+    const enabledBadge = src.enabled ? '' : '<span style="display:inline-block;background:rgba(239,68,68,.12);color:var(--red);font-size:8px;font-weight:700;padding:1px 4px;border-radius:999px;margin-left:6px">OFF</span>';
+    const builtInBadge = src.built_in ? '<span style="display:inline-block;background:rgba(34,197,94,.12);color:var(--green);font-size:8px;font-weight:700;padding:1px 4px;border-radius:999px;margin-left:6px">BUILT-IN</span>' : '<span style="display:inline-block;background:rgba(59,130,246,.12);color:#60a5fa;font-size:8px;font-weight:700;padding:1px 4px;border-radius:999px;margin-left:6px">EXTRA</span>';
+    const shortUrl = escapeHtml(String(src.url).replace(/^https?:\/\//, ''));
+    return '<div style="padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+        '<div style="min-width:0;flex:1">' +
+          '<div style="font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + shortUrl + builtInBadge + enabledBadge + '</div>' +
+          '<div style="font-size:10px;color:var(--fg-dim)">' + String(src.protocol || '').toUpperCase() + ' · ' + String(src.group || 'slow').toUpperCase() + ' · ' + t('source.success_rate') + ' ' + Math.round(src.success_rate || 0) + '%</div>' +
+        '</div>' +
+        '<div style="text-align:right;white-space:nowrap">' +
+          '<div style="font-size:10px;font-weight:700;color:' + color + '">' + statusLabel + '</div>' +
+          '<div style="font-size:10px;color:var(--fg-dim)">' + t('source.health_score') + ' ' + (src.health_score || 0) + '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
 async function loadLogs() {
   const data = await api('/api/logs');
   if (!data) return;
@@ -1398,6 +1505,8 @@ async function openSettings() {
   document.getElementById('cfg-replace-threshold').value = cfg.replace_threshold;
   document.getElementById('cfg-blocked-countries').value = (cfg.blocked_countries || []).join(',');
   document.getElementById('cfg-allowed-countries').value = (cfg.allowed_countries || []).join(',');
+  document.getElementById('cfg-extra-sources').value = formatSourceConfigs(cfg.extra_sources || []);
+  document.getElementById('cfg-disabled-source-urls').value = (cfg.disabled_source_urls || []).join('\n');
   // 将 mode + priority 映射到5种模式
   const mode = cfg.custom_proxy_mode || 'mixed';
   const customPri = cfg.custom_priority === true;
@@ -1435,6 +1544,8 @@ async function saveConfig() {
     replace_threshold: parseFloat(document.getElementById('cfg-replace-threshold').value),
     blocked_countries: document.getElementById('cfg-blocked-countries').value.split(',').map(s => s.trim().toUpperCase()).filter(s => s),
     allowed_countries: document.getElementById('cfg-allowed-countries').value.split(',').map(s => s.trim().toUpperCase()).filter(s => s),
+    extra_sources: parseSourceConfigs(document.getElementById('cfg-extra-sources').value),
+    disabled_source_urls: parseDisabledSourceUrls(document.getElementById('cfg-disabled-source-urls').value),
     custom_proxy_mode: (() => {
       const m = document.getElementById('cfg-custom-mode').value;
       if (m === 'custom_only') return 'custom_only';
@@ -1472,6 +1583,7 @@ async function loadAll() {
   loadPoolStatus();
   loadQualityDistribution();
   loadProxies();
+  loadSourceStats();
   loadLogs();
 }
 
@@ -1807,6 +1919,7 @@ loadAll();
 loadSubscriptions();
 setInterval(loadPoolStatus, 5000);
 setInterval(loadQualityDistribution, 10000);
+setInterval(loadSourceStats, 15000);
 setInterval(loadLogs, 5000);
 setInterval(loadSubscriptions, 30000);
 

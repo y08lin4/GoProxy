@@ -18,6 +18,7 @@ import (
 
 	"goproxy/config"
 	"goproxy/custom"
+	"goproxy/internal/domain"
 	"goproxy/internal/ports"
 	appservice "goproxy/internal/service"
 	"goproxy/logger"
@@ -106,17 +107,22 @@ type Server struct {
 	poolMgr       *pool.Manager
 	customMgr     *custom.Manager
 	proxyAdmin    *appservice.ProxyAdminService
+	sourceAdmin   *appservice.SourceAdminService
 	fetchTrigger  FetchTrigger
 	configChanged chan<- struct{}
 }
 
-func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Manager, geoIP ports.GeoIPResolver, ft FetchTrigger, cc chan<- struct{}) *Server {
+func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Manager, geoIP ports.GeoIPResolver, proxyAdmin *appservice.ProxyAdminService, sourceAdmin *appservice.SourceAdminService, ft FetchTrigger, cc chan<- struct{}) *Server {
+	if proxyAdmin == nil {
+		proxyAdmin = appservice.NewProxyAdminService(s, geoIP)
+	}
 	return &Server{
 		storage:       s,
 		cfg:           cfg,
 		poolMgr:       pm,
 		customMgr:     cm,
-		proxyAdmin:    appservice.NewProxyAdminService(s, geoIP),
+		proxyAdmin:    proxyAdmin,
+		sourceAdmin:   sourceAdmin,
 		fetchTrigger:  ft,
 		configChanged: cc,
 	}
@@ -145,6 +151,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/logs", s.readOnlyMiddleware(s.apiLogs))
 	mux.HandleFunc("/api/pool/status", s.readOnlyMiddleware(s.apiPoolStatus))
 	mux.HandleFunc("/api/pool/quality", s.readOnlyMiddleware(s.apiQualityDistribution))
+	mux.HandleFunc("/api/sources/status", s.readOnlyMiddleware(s.apiSourceStats))
 	mux.HandleFunc("/api/config", s.readOnlyMiddleware(s.apiConfig))
 	mux.HandleFunc("/api/auth/check", s.apiAuthCheck) // 检查登录状态
 
@@ -359,6 +366,19 @@ func (s *Server) apiLogs(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"lines": lines})
 }
 
+func (s *Server) apiSourceStats(w http.ResponseWriter, r *http.Request) {
+	if s.sourceAdmin == nil {
+		jsonOK(w, []interface{}{})
+		return
+	}
+	stats, err := s.sourceAdmin.Stats()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, stats)
+}
+
 // apiConfig 获取配置
 func (s *Server) apiConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Get()
@@ -400,6 +420,8 @@ func (s *Server) apiConfig(w http.ResponseWriter, r *http.Request) {
 		"custom_free_priority":    cfg.CustomFreePriority,
 		"custom_probe_interval":   cfg.CustomProbeInterval,
 		"custom_refresh_interval": cfg.CustomRefreshInterval,
+		"extra_sources":           cfg.ExtraSources,
+		"disabled_source_urls":    cfg.DisabledSourceURLs,
 	})
 }
 
@@ -411,26 +433,28 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		PoolMaxSize            int      `json:"pool_max_size"`
-		PoolHTTPRatio          float64  `json:"pool_http_ratio"`
-		PoolMinPerProtocol     int      `json:"pool_min_per_protocol"`
-		MaxLatencyMs           int      `json:"max_latency_ms"`
-		MaxLatencyEmergency    int      `json:"max_latency_emergency"`
-		MaxLatencyHealthy      int      `json:"max_latency_healthy"`
-		ValidateConcurrency    int      `json:"validate_concurrency"`
-		ValidateTimeout        int      `json:"validate_timeout"`
-		MaxCandidatesPerSource *int     `json:"max_candidates_per_source"`
-		HealthCheckInterval    int      `json:"health_check_interval"`
-		HealthCheckBatchSize   int      `json:"health_check_batch_size"`
-		OptimizeInterval       int      `json:"optimize_interval"`
-		ReplaceThreshold       float64  `json:"replace_threshold"`
-		BlockedCountries       []string `json:"blocked_countries"`
-		AllowedCountries       []string `json:"allowed_countries"`
-		CustomProxyMode        string   `json:"custom_proxy_mode"`
-		CustomPriority         *bool    `json:"custom_priority"`
-		CustomFreePriority     *bool    `json:"custom_free_priority"`
-		CustomProbeInterval    int      `json:"custom_probe_interval"`
-		CustomRefreshInterval  int      `json:"custom_refresh_interval"`
+		PoolMaxSize            int                        `json:"pool_max_size"`
+		PoolHTTPRatio          float64                    `json:"pool_http_ratio"`
+		PoolMinPerProtocol     int                        `json:"pool_min_per_protocol"`
+		MaxLatencyMs           int                        `json:"max_latency_ms"`
+		MaxLatencyEmergency    int                        `json:"max_latency_emergency"`
+		MaxLatencyHealthy      int                        `json:"max_latency_healthy"`
+		ValidateConcurrency    int                        `json:"validate_concurrency"`
+		ValidateTimeout        int                        `json:"validate_timeout"`
+		MaxCandidatesPerSource *int                       `json:"max_candidates_per_source"`
+		HealthCheckInterval    int                        `json:"health_check_interval"`
+		HealthCheckBatchSize   int                        `json:"health_check_batch_size"`
+		OptimizeInterval       int                        `json:"optimize_interval"`
+		ReplaceThreshold       float64                    `json:"replace_threshold"`
+		BlockedCountries       []string                   `json:"blocked_countries"`
+		AllowedCountries       []string                   `json:"allowed_countries"`
+		CustomProxyMode        string                     `json:"custom_proxy_mode"`
+		CustomPriority         *bool                      `json:"custom_priority"`
+		CustomFreePriority     *bool                      `json:"custom_free_priority"`
+		CustomProbeInterval    int                        `json:"custom_probe_interval"`
+		CustomRefreshInterval  int                        `json:"custom_refresh_interval"`
+		ExtraSources           []domain.FetchSourceConfig `json:"extra_sources"`
+		DisabledSourceURLs     []string                   `json:"disabled_source_urls"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -488,6 +512,12 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CustomRefreshInterval > 0 {
 		newCfg.CustomRefreshInterval = req.CustomRefreshInterval
+	}
+	if req.ExtraSources != nil {
+		newCfg.ExtraSources = req.ExtraSources
+	}
+	if req.DisabledSourceURLs != nil {
+		newCfg.DisabledSourceURLs = req.DisabledSourceURLs
 	}
 
 	if err := config.Save(&newCfg); err != nil {

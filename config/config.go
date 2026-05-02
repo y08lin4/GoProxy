@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"goproxy/internal/domain"
 )
 
 const DefaultPassword = "goproxy"
@@ -87,6 +89,8 @@ type Config struct {
 	SourceFailThreshold    int // 源降级阈值（默认3）
 	SourceDisableThreshold int // 源禁用阈值（默认5）
 	SourceCooldownMinutes  int // 源禁用冷却时间（默认30）
+	ExtraSources           []domain.FetchSourceConfig
+	DisabledSourceURLs     []string
 
 	// ========== 自定义订阅代理配置 ==========
 	CustomProxyMode       string // 代理使用模式：mixed / custom_only / free_only（默认 mixed）
@@ -303,6 +307,12 @@ func Load() *Config {
 			if saved.ReplaceThreshold > 0 && saved.ReplaceThreshold <= 1 {
 				cfg.ReplaceThreshold = saved.ReplaceThreshold
 			}
+			if saved.ExtraSources != nil {
+				cfg.ExtraSources = saved.ExtraSources
+			}
+			if saved.DisabledSourceURLs != nil {
+				cfg.DisabledSourceURLs = saved.DisabledSourceURLs
+			}
 
 			// 兼容旧配置
 			if saved.FetchInterval > 0 {
@@ -379,8 +389,10 @@ type savedConfig struct {
 	HealthCheckBatchSize int `json:"health_check_batch_size"`
 
 	// 优化配置
-	OptimizeInterval int     `json:"optimize_interval"`
-	ReplaceThreshold float64 `json:"replace_threshold"`
+	OptimizeInterval   int                        `json:"optimize_interval"`
+	ReplaceThreshold   float64                    `json:"replace_threshold"`
+	ExtraSources       []domain.FetchSourceConfig `json:"extra_sources,omitempty"`
+	DisabledSourceURLs []string                   `json:"disabled_source_urls,omitempty"`
 
 	// 地理过滤配置
 	BlockedCountries []string `json:"blocked_countries,omitempty"`
@@ -423,6 +435,8 @@ func Save(cfg *Config) error {
 		HealthCheckBatchSize:   cfg.HealthCheckBatchSize,
 		OptimizeInterval:       cfg.OptimizeInterval,
 		ReplaceThreshold:       cfg.ReplaceThreshold,
+		ExtraSources:           cfg.ExtraSources,
+		DisabledSourceURLs:     cfg.DisabledSourceURLs,
 		BlockedCountries:       cfg.BlockedCountries,
 		AllowedCountries:       cfg.AllowedCountries,
 		CustomProxyMode:        cfg.CustomProxyMode,

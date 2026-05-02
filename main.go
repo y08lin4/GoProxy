@@ -56,6 +56,8 @@ func main() {
 	healthChecker := checker.NewHealthChecker(store, validate, cfg, poolMgr)
 	opt := optimizer.NewOptimizer(fetch, validate, poolMgr, cfg)
 	refillSvc := service.NewRefillService(fetch, validate, poolMgr)
+	proxyAdmin := service.NewProxyAdminService(store, geoResolver)
+	sourceAdmin := service.NewSourceAdminService(fetch, sourceMgr)
 
 	totalDeleted := cleanupInvalidProxies(store, cfg)
 
@@ -68,7 +70,7 @@ func main() {
 	defer customMgr.Stop()
 
 	configChanged := make(chan struct{}, 1)
-	ui := webui.New(store, cfg, poolMgr, customMgr, geoResolver, func() {
+	ui := webui.New(store, cfg, poolMgr, customMgr, geoResolver, proxyAdmin, sourceAdmin, func() {
 		refillSvc.Run(ctx)
 	}, configChanged)
 
