@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -97,11 +98,22 @@ func (hc *HealthChecker) RunOnce() {
 }
 
 // StartBackground 后台定时健康检查
-func (hc *HealthChecker) StartBackground() {
+func (hc *HealthChecker) StartBackground(ctxs ...context.Context) {
+	ctx := context.Background()
+	if len(ctxs) > 0 && ctxs[0] != nil {
+		ctx = ctxs[0]
+	}
 	ticker := time.NewTicker(time.Duration(hc.cfg.HealthCheckInterval) * time.Minute)
 	go func() {
-		for range ticker.C {
-			hc.RunOnce()
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("[health] 健康检查器已停止")
+				return
+			case <-ticker.C:
+				hc.RunOnce()
+			}
 		}
 	}()
 	log.Printf("[health] 健康检查器已启动，间隔 %d 分钟", hc.cfg.HealthCheckInterval)

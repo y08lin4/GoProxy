@@ -1,6 +1,7 @@
 package custom
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,7 @@ type Manager struct {
 	singbox   *SingBoxProcess
 	config    config.Provider
 	stopCh    chan struct{}
+	stopOnce  sync.Once
 	refreshMu sync.Mutex // 防止并发刷新
 }
 
@@ -48,8 +50,14 @@ func NewManager(store ports.SubscriptionStore, v *validator.Validator, cfg *conf
 }
 
 // Start 启动后台循环
-func (m *Manager) Start() {
+func (m *Manager) Start(ctxs ...context.Context) {
 	log.Println("[custom] 订阅管理器启动")
+	if len(ctxs) > 0 && ctxs[0] != nil {
+		go func(ctx context.Context) {
+			<-ctx.Done()
+			m.Stop()
+		}(ctxs[0])
+	}
 
 	// 启动时立即刷新所有订阅
 	go m.initialRefresh()
@@ -63,14 +71,20 @@ func (m *Manager) Start() {
 
 // Stop 停止管理器
 func (m *Manager) Stop() {
-	close(m.stopCh)
-	m.singbox.Stop()
-	log.Println("[custom] 订阅管理器已停止")
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+		m.singbox.Stop()
+		log.Println("[custom] 订阅管理器已停止")
+	})
 }
 
 // initialRefresh 启动时刷新所有活跃订阅
 func (m *Manager) initialRefresh() {
-	time.Sleep(3 * time.Second) // 等待其他模块初始化
+	select {
+	case <-m.stopCh:
+		return
+	case <-time.After(3 * time.Second): // 等待其他模块初始化
+	}
 	subs, err := m.storage.GetSubscriptions()
 	if err != nil || len(subs) == 0 {
 		return
@@ -153,7 +167,11 @@ func (m *Manager) cleanupStaleSubscriptions() {
 // probeLoop 探测唤醒循环
 func (m *Manager) probeLoop() {
 	// 等待初始化完成
-	time.Sleep(5 * time.Second)
+	select {
+	case <-m.stopCh:
+		return
+	case <-time.After(5 * time.Second):
+	}
 
 	for {
 		cfg := m.config.Get()

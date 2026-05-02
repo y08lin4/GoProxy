@@ -19,6 +19,8 @@
 - `optimizer` 改为使用领域模型候选，不再直接依赖 `storage` 包。
 - 新增订阅管理和 WebUI 代理管理端口接口，`custom.Manager` 不再直接依赖 `storage` 包。
 - 新增 `ProxyAdminService` 与配置 Provider，WebUI 的代理统计、列表、删除和刷新逻辑开始下沉到 service 层。
+- 健康检查器、优化器、订阅管理器、状态监控和配置监听支持 `context` 停止，主进程改为使用信号驱动的统一生命周期管理。
+- WebUI、HTTP 代理和 SOCKS5 代理支持在上下文取消时优雅停止，不再由后台 goroutine 直接 `log.Fatalf` 终止整个进程。
 
 ### 重构
 

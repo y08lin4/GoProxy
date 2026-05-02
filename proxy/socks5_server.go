@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -34,6 +36,13 @@ func NewSOCKS5(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port 
 
 // Start 启动 SOCKS5 服务器
 func (s *SOCKS5Server) Start() error {
+	return s.Run(context.Background())
+}
+
+func (s *SOCKS5Server) Run(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	modeDesc := "随机轮换"
 	if s.mode == "lowest-latency" {
 		modeDesc = "最低延迟"
@@ -50,9 +59,17 @@ func (s *SOCKS5Server) Start() error {
 	}
 	defer listener.Close()
 
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			continue
 		}
 		go s.handleConnection(conn)

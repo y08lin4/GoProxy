@@ -1,12 +1,14 @@
 package proxy
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -34,6 +36,13 @@ func New(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port string
 }
 
 func (s *Server) Start() error {
+	return s.Run(context.Background())
+}
+
+func (s *Server) Run(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	modeDesc := "随机轮换"
 	if s.mode == "lowest-latency" {
 		modeDesc = "最低延迟"
@@ -43,7 +52,27 @@ func (s *Server) Start() error {
 		authStatus = fmt.Sprintf("需认证 (用户: %s)", s.cfg.ProxyAuthUsername)
 	}
 	log.Printf("proxy server listening on %s [%s] [%s]", s.port, modeDesc, authStatus)
-	return http.ListenAndServe(s.port, s)
+	server := &http.Server{Addr: s.port, Handler: s}
+	listener, err := net.Listen("tcp", s.port)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+			log.Printf("[proxy] shutdown error on %s: %v", s.port, err)
+		}
+	}()
+
+	err = server.Serve(listener)
+	if err != nil && err != http.ErrServerClosed && ctx.Err() == nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

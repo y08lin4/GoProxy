@@ -1,12 +1,14 @@
 package webui
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -119,7 +121,10 @@ func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Ma
 	}
 }
 
-func (s *Server) Start() {
+func (s *Server) Run(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	mux := http.NewServeMux()
 
 	// 添加日志中间件
@@ -160,9 +165,37 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/subscription/toggle", s.authMiddleware(s.apiSubscriptionToggle))
 
 	log.Printf("WebUI listening on %s", s.cfg.WebUIPort)
+	server := &http.Server{Addr: s.cfg.WebUIPort, Handler: loggedMux}
+	listener, err := net.Listen("tcp", s.cfg.WebUIPort)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
 	go func() {
-		if err := http.ListenAndServe(s.cfg.WebUIPort, loggedMux); err != nil {
-			log.Fatalf("webui: %v", err)
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+			log.Printf("[webui] shutdown error: %v", err)
+		}
+	}()
+
+	err = server.Serve(listener)
+	if err != nil && err != http.ErrServerClosed && ctx.Err() == nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) Start(ctxs ...context.Context) {
+	ctx := context.Background()
+	if len(ctxs) > 0 && ctxs[0] != nil {
+		ctx = ctxs[0]
+	}
+	go func() {
+		if err := s.Run(ctx); err != nil {
+			log.Printf("[webui] server stopped with error: %v", err)
 		}
 	}()
 }

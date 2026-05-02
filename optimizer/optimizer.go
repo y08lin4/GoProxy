@@ -1,6 +1,7 @@
 package optimizer
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -96,11 +97,22 @@ func (o *Optimizer) RunOnce() {
 }
 
 // StartBackground 后台定时优化
-func (o *Optimizer) StartBackground() {
+func (o *Optimizer) StartBackground(ctxs ...context.Context) {
+	ctx := context.Background()
+	if len(ctxs) > 0 && ctxs[0] != nil {
+		ctx = ctxs[0]
+	}
 	ticker := time.NewTicker(time.Duration(o.cfg.OptimizeInterval) * time.Minute)
 	go func() {
-		for range ticker.C {
-			o.RunOnce()
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("[optimize] 优化轮换器已停止")
+				return
+			case <-ticker.C:
+				o.RunOnce()
+			}
 		}
 	}()
 	log.Printf("[optimize] 优化轮换器已启动，间隔 %d 分钟", o.cfg.OptimizeInterval)
