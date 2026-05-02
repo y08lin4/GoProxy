@@ -550,6 +550,9 @@ func (s *Server) apiQualityDistribution(w http.ResponseWriter, r *http.Request) 
 	}
 	jsonOK(w, dist)
 }
+
+// ========== 订阅管理 API ==========
+
 func (s *Server) apiSubscriptions(w http.ResponseWriter, r *http.Request) {
 	subs, err := s.subAdmin.List()
 	if err != nil {
@@ -558,9 +561,11 @@ func (s *Server) apiSubscriptions(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, subs)
 }
+
 func (s *Server) apiCustomStatus(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, s.subAdmin.Status())
 }
+
 func (s *Server) apiSubscriptionContribute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -576,11 +581,11 @@ func (s *Server) apiSubscriptionContribute(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if req.URL == "" && req.FileContent == "" {
-		jsonError(w, "????? URL ???????", http.StatusBadRequest)
+		jsonError(w, "请填写订阅 URL 或上传配置文件", http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" {
-		req.Name = "????"
+		req.Name = "贡献订阅"
 	}
 
 	id, err := s.subAdmin.Contribute(req.Name, req.URL, req.FileContent)
@@ -590,6 +595,7 @@ func (s *Server) apiSubscriptionContribute(w http.ResponseWriter, r *http.Reques
 	}
 	jsonOK(w, map[string]interface{}{"status": "contributed", "id": id})
 }
+
 func (s *Server) apiSubscriptionAdd(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -606,11 +612,11 @@ func (s *Server) apiSubscriptionAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.URL == "" && req.FileContent == "" {
-		jsonError(w, "????? URL ???????", http.StatusBadRequest)
+		jsonError(w, "请填写订阅 URL 或上传配置文件", http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" {
-		req.Name = "??"
+		req.Name = "订阅"
 	}
 
 	id, err := s.subAdmin.Add(req.Name, req.URL, req.FileContent, req.RefreshMin)
@@ -620,6 +626,7 @@ func (s *Server) apiSubscriptionAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]interface{}{"status": "added", "id": id})
 }
+
 func (s *Server) apiSubscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -639,6 +646,7 @@ func (s *Server) apiSubscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
+
 func (s *Server) apiSubscriptionRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -655,6 +663,7 @@ func (s *Server) apiSubscriptionRefresh(w http.ResponseWriter, r *http.Request) 
 	s.subAdmin.Refresh(req.ID)
 	jsonOK(w, map[string]string{"status": "refresh started"})
 }
+
 func (s *Server) apiSubscriptionRefreshAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -664,6 +673,7 @@ func (s *Server) apiSubscriptionRefreshAll(w http.ResponseWriter, r *http.Reques
 	s.subAdmin.RefreshAll()
 	jsonOK(w, map[string]string{"status": "refresh all started"})
 }
+
 func (s *Server) apiSubscriptionToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -684,6 +694,7 @@ func (s *Server) apiSubscriptionToggle(w http.ResponseWriter, r *http.Request) {
 
 	jsonOK(w, map[string]string{"status": "toggled"})
 }
+
 func jsonOK(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
