@@ -31,6 +31,7 @@
 - `validator`、`webui`、`custom.Manager`、`proxy` 入口和后台配置监听改为通过 `ConfigProvider` / `StaticProvider` 获取配置，进一步收口散落的全局配置读取。
 - 清理 `main`、`checker`、`optimizer`、`fetcher/source_manager`、`proxy` 等关键运行路径中的乱码日志与注释，提升运行可读性。
 - 将 `config`、`pool`、`validator`、`webui` 等剩余高可见度源码文件统一按 UTF-8 BOM 写回，修复当前 Windows PowerShell 直接查看时的中文显示问题。
+- 将 `storage` 相关源码文件统一按 UTF-8 BOM 写回并清理中文注释与错误提示，继续提升仓库整体可读性。
 
 ### 重构
 
