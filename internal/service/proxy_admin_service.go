@@ -16,12 +16,30 @@ type ProxyAdminService struct {
 	config config.Provider
 }
 
+const (
+	defaultProxyPageSize = 50
+	maxProxyPageSize     = 200
+)
+
 func NewProxyAdminService(store ports.ProxyAdminStore, geoIP ports.GeoIPResolver, providers ...config.Provider) *ProxyAdminService {
 	provider := config.Provider(config.GlobalProvider{})
 	if len(providers) > 0 && providers[0] != nil {
 		provider = providers[0]
 	}
 	return &ProxyAdminService{store: store, geoIP: geoIP, config: provider}
+}
+
+func clampProxyPage(page int, pageSize int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	switch {
+	case pageSize <= 0:
+		pageSize = defaultProxyPageSize
+	case pageSize > maxProxyPageSize:
+		pageSize = maxProxyPageSize
+	}
+	return page, pageSize
 }
 
 func (s *ProxyAdminService) Stats(proxyPort string) map[string]interface{} {
@@ -43,6 +61,44 @@ func (s *ProxyAdminService) List(protocol string) ([]domain.Proxy, error) {
 		return s.store.GetByProtocol(protocol)
 	}
 	return s.store.GetAll()
+}
+
+func (s *ProxyAdminService) ListPage(protocol string, country string, page int, pageSize int) (*domain.ProxyPage, error) {
+	page, pageSize = clampProxyPage(page, pageSize)
+
+	items, total, err := s.store.ListProxyPage(protocol, country, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+		if page > totalPages {
+			page = totalPages
+			items, total, err = s.store.ListProxyPage(protocol, country, page, pageSize)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	countries, err := s.store.ListProxyCountries(protocol)
+	if err != nil {
+		return nil, err
+	}
+
+	return &domain.ProxyPage{
+		Items:       items,
+		Total:       total,
+		Page:        page,
+		PageSize:    pageSize,
+		TotalPages:  totalPages,
+		Protocol:    protocol,
+		Country:     country,
+		Countries:   countries,
+		HasNext:     totalPages > 0 && page < totalPages,
+		HasPrevious: page > 1 && totalPages > 0,
+	}, nil
 }
 
 func (s *ProxyAdminService) Delete(address string) error {

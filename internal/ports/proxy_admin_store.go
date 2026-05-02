@@ -7,6 +7,8 @@ type ProxyAdminStore interface {
 	Count() (int, error)
 	CountByProtocol(protocol string) (int, error)
 	CountBySource(source string) (int, error)
+	ListProxyPage(protocol string, country string, page int, pageSize int) ([]domain.Proxy, int, error)
+	ListProxyCountries(protocol string) ([]string, error)
 	GetByProtocol(protocol string) ([]domain.Proxy, error)
 	GetAll() ([]domain.Proxy, error)
 	GetProxyByAddress(address string) (*domain.Proxy, error)

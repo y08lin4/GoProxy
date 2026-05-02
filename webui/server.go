@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -281,7 +282,21 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiProxies(w http.ResponseWriter, r *http.Request) {
 	protocol := r.URL.Query().Get("protocol")
-	proxies, err := s.proxyAdmin.List(protocol)
+	country := r.URL.Query().Get("country")
+	page := 1
+	pageSize := 50
+	if value := r.URL.Query().Get("page"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			page = parsed
+		}
+	}
+	if value := r.URL.Query().Get("page_size"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			pageSize = parsed
+		}
+	}
+
+	proxies, err := s.proxyAdmin.ListPage(protocol, country, page, pageSize)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -556,6 +571,7 @@ func (s *Server) apiCustomStatus(w http.ResponseWriter, r *http.Request) {
 			"custom_count":       0,
 			"disabled_count":     0,
 			"subscription_count": 0,
+			"refresh_tasks":      []interface{}{},
 		})
 		return
 	}

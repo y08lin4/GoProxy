@@ -172,6 +172,106 @@ func (s *Storage) GetAllFiltered(sourceFilter string) ([]Proxy, error) {
 	return proxies, nil
 }
 
+func buildProxyFilterWhere(protocol string, country string) (string, []interface{}) {
+	var clauses []string
+	var args []interface{}
+
+	clauses = append(clauses, `status IN ('active', 'degraded')`, `fail_count < 3`)
+
+	if protocol != "" {
+		clauses = append(clauses, `protocol = ?`)
+		args = append(args, protocol)
+	}
+	if country != "" {
+		clauses = append(clauses, `(country_code = ? OR exit_location = ? OR exit_location LIKE ?)`)
+		args = append(args, country, country, country+" %")
+	}
+
+	return strings.Join(clauses, " AND "), args
+}
+
+// ListProxyPage returns a paginated list of available proxies with optional protocol/country filters.
+func (s *Storage) ListProxyPage(protocol string, country string, page int, pageSize int) ([]Proxy, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+
+	where, args := buildProxyFilterWhere(protocol, country)
+
+	var total int
+	countQuery := `SELECT COUNT(*) FROM proxies WHERE ` + where
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	query := `SELECT ` + proxyColumns + `
+		 FROM proxies
+		 WHERE ` + where + `
+		 ORDER BY latency ASC, created_at DESC
+		 LIMIT ? OFFSET ?`
+	pageArgs := append(append([]interface{}{}, args...), pageSize, offset)
+
+	rows, err := s.db.Query(query, pageArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var proxies []Proxy
+	for rows.Next() {
+		p, err := scanProxy(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		proxies = append(proxies, *p)
+	}
+	return proxies, total, nil
+}
+
+// ListProxyCountries returns distinct country codes for available proxies under an optional protocol filter.
+func (s *Storage) ListProxyCountries(protocol string) ([]string, error) {
+	where, args := buildProxyFilterWhere(protocol, "")
+	query := `SELECT country_code, exit_location
+		 FROM proxies
+		 WHERE ` + where + `
+		 ORDER BY country_code ASC, exit_location ASC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seen := make(map[string]struct{})
+	var countries []string
+	for rows.Next() {
+		var countryCode, exitLocation string
+		if err := rows.Scan(&countryCode, &exitLocation); err != nil {
+			return nil, err
+		}
+		code := strings.TrimSpace(strings.ToUpper(countryCode))
+		if code == "" && exitLocation != "" {
+			fields := strings.Fields(exitLocation)
+			if len(fields) > 0 {
+				code = strings.ToUpper(fields[0])
+			}
+		}
+		if len(code) != 2 {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		countries = append(countries, code)
+	}
+	return countries, nil
+}
+
 // GetRandomExclude 排除指定地址随机取一个
 func (s *Storage) GetRandomExclude(excludes []string) (*Proxy, error) {
 	return s.GetRandomExcludeFiltered(excludes, "")

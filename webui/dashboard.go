@@ -638,6 +638,10 @@ const i18n = {
     'proxy.btn_refresh': '刷新',
     'proxy.copy_success': '已复制',
     'proxy.refresh_started': '刷新已启动',
+    'proxy.page_prev': '上一页',
+    'proxy.page_next': '下一页',
+    'proxy.page_size': '每页',
+    'proxy.page_info': '第 {0}/{1} 页 · 共 {2} 条',
     'log.title': '系统日志',
     'log.auto_refresh_label': '自动刷新',
     'log.loading': '加载中...',
@@ -721,6 +725,10 @@ const i18n = {
     'sub.available': '可用',
     'sub.disabled_label': '禁用',
     'sub.contributed': '贡献',
+    'sub.task_running': '刷新中',
+    'sub.task_validating': '验证中',
+    'sub.task_success': '已完成',
+    'sub.task_failed': '失败',
     // 添加订阅弹窗
     'sub.add_title': '添加订阅',
     'sub.name': '名称',
@@ -801,6 +809,10 @@ const i18n = {
     'proxy.btn_refresh': 'Refresh',
     'proxy.copy_success': 'Copied',
     'proxy.refresh_started': 'Refresh started',
+    'proxy.page_prev': 'Prev',
+    'proxy.page_next': 'Next',
+    'proxy.page_size': 'Per page',
+    'proxy.page_info': 'Page {0}/{1} · {2} items',
     'log.title': 'System Log',
     'log.auto_refresh_label': 'Auto Refresh',
     'log.loading': 'Loading...',
@@ -881,6 +893,10 @@ const i18n = {
     'sub.available': 'available',
     'sub.disabled_label': 'disabled',
     'sub.contributed': 'Contributed',
+    'sub.task_running': 'Refreshing',
+    'sub.task_validating': 'Validating',
+    'sub.task_success': 'Done',
+    'sub.task_failed': 'Failed',
     'sub.add_title': 'Add Subscription',
     'sub.name': 'Name',
     'sub.import_mode': 'Import Mode',
@@ -967,8 +983,14 @@ if (savedLang) {
 
 let currentProtocol = '';
 let currentCountry = '';
+let currentProxyPage = 1;
+let currentProxyPageSize = 50;
+let currentProxyTotalPages = 0;
+let currentProxyTotal = 0;
 let allProxies = [];
+let proxyCountries = [];
 let isAdmin = false; // 是否为管理员
+let subTaskPollTimer = null;
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -1018,8 +1040,20 @@ function updateUIByRole() {
   
   // 重新渲染代理列表（更新操作列）
   if (allProxies.length > 0) {
-    filterAndRender();
+    renderProxies(allProxies, currentProxyPageState());
   }
+}
+
+function currentProxyPageState() {
+  return {
+    total: currentProxyTotal,
+    page: currentProxyPage,
+    page_size: currentProxyPageSize,
+    total_pages: currentProxyTotalPages,
+    has_previous: currentProxyPage > 1,
+    has_next: currentProxyPage < currentProxyTotalPages,
+    countries: proxyCountries
+  };
 }
 
 function getCountryFlag(countryCode) {
@@ -1051,7 +1085,7 @@ async function refreshProxy(address) {
   });
   if (res) {
     showToast(t('proxy.refresh_started'));
-    setTimeout(() => loadProxies(currentFilter), 2000);
+    setTimeout(() => loadProxies(), 2000);
   }
 }
 
@@ -1106,52 +1140,71 @@ async function loadProxies() {
     subs.forEach(s => { subNameMap[s.id] = s.name || t('sub.add_title'); });
   }
 
-  const path = currentProtocol ? '/api/proxies?protocol=' + currentProtocol : '/api/proxies';
-  const proxies = await api(path);
-  if (!proxies) return;
+  const params = new URLSearchParams();
+  if (currentProtocol) params.set('protocol', currentProtocol);
+  if (currentCountry) params.set('country', currentCountry);
+  params.set('page', currentProxyPage);
+  params.set('page_size', currentProxyPageSize);
 
-  allProxies = proxies;
-  updateCountryOptions();
-  filterAndRender();
+  const pageData = await api('/api/proxies?' + params.toString());
+  if (!pageData) return;
+
+  allProxies = pageData.items || [];
+  currentProxyPage = pageData.page || 1;
+  currentProxyPageSize = pageData.page_size || currentProxyPageSize;
+  currentProxyTotalPages = pageData.total_pages || 0;
+  currentProxyTotal = pageData.total || 0;
+  proxyCountries = pageData.countries || [];
+  updateCountryOptions(proxyCountries);
+  renderProxies(allProxies, pageData);
 }
 
-function updateCountryOptions() {
-  const countries = new Set();
-  allProxies.forEach(p => {
-    if (p.exit_location) {
-      const countryCode = p.exit_location.split(' ')[0];
-      if (countryCode) countries.add(countryCode);
-    }
-  });
-  
+function updateCountryOptions(countries) {
   const select = document.getElementById('country-filter');
+  if (!select) return;
   const currentValue = select.value;
   select.innerHTML = '<option value="" id="country-filter-label">' + t('proxy.filter_country') + '</option>';
-  Array.from(countries).sort().forEach(code => {
+  Array.from(countries || []).sort().forEach(code => {
     const flag = getCountryFlag(code);
     select.innerHTML += '<option value="' + code + '">' + flag + ' ' + code + '</option>';
   });
-  if (currentValue && countries.has(currentValue)) {
+  if (currentValue && (countries || []).includes(currentValue)) {
     select.value = currentValue;
+  } else if (currentCountry && !(countries || []).includes(currentCountry)) {
+    currentCountry = '';
   }
-}
-
-function filterAndRender() {
-  let filtered = allProxies;
-  if (currentCountry) {
-    filtered = filtered.filter(p => p.exit_location && (p.exit_location === currentCountry || p.exit_location.startsWith(currentCountry + ' ')));
-  }
-  renderProxies(filtered);
 }
 
 function setProtocolFilter(protocol) {
   currentProtocol = protocol;
+  currentCountry = '';
+  currentProxyPage = 1;
   loadProxies();
 }
 
 function setCountryFilter(country) {
   currentCountry = country;
-  filterAndRender();
+  currentProxyPage = 1;
+  loadProxies();
+}
+
+function setProxyPage(page) {
+  const nextPage = Number(page);
+  if (!Number.isFinite(nextPage) || nextPage < 1 || nextPage === currentProxyPage || (currentProxyTotalPages > 0 && nextPage > currentProxyTotalPages)) {
+    return;
+  }
+  currentProxyPage = nextPage;
+  loadProxies();
+}
+
+function setPageSize(pageSize) {
+  const nextSize = Number(pageSize);
+  if (!Number.isFinite(nextSize) || nextSize <= 0 || nextSize === currentProxyPageSize) {
+    return;
+  }
+  currentProxyPageSize = nextSize;
+  currentProxyPage = 1;
+  loadProxies();
 }
 
 
@@ -1190,7 +1243,32 @@ function renderIPAttributes(p) {
   return html;
 }
 
-function renderProxies(proxies) {
+function renderProxyPagination(pageData) {
+  if (!pageData || !pageData.total) return '';
+
+  const page = pageData.page || 1;
+  const totalPages = pageData.total_pages || 1;
+  const total = pageData.total || 0;
+  const prevDisabled = !pageData.has_previous;
+  const nextDisabled = !pageData.has_next;
+
+  return '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 4px 0;color:var(--fg-dim);font-size:11px;flex-wrap:wrap">' +
+    '<div>' + t('proxy.page_info').replace('{0}', page).replace('{1}', totalPages).replace('{2}', total) + '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px">' +
+      '<label style="display:flex;align-items:center;gap:4px"><span>' + t('proxy.page_size') + '</span>' +
+        '<select class="filter-select" style="min-width:72px" onchange="setPageSize(this.value)">' +
+          '<option value="20"' + (currentProxyPageSize === 20 ? ' selected' : '') + '>20</option>' +
+          '<option value="50"' + (currentProxyPageSize === 50 ? ' selected' : '') + '>50</option>' +
+          '<option value="100"' + (currentProxyPageSize === 100 ? ' selected' : '') + '>100</option>' +
+        '</select>' +
+      '</label>' +
+      '<button class="ctrl-btn-secondary" ' + (prevDisabled ? 'disabled style="opacity:.5;cursor:not-allowed"' : 'onclick="setProxyPage(' + (page - 1) + ')"') + '>' + t('proxy.page_prev') + '</button>' +
+      '<button class="ctrl-btn-secondary" ' + (nextDisabled ? 'disabled style="opacity:.5;cursor:not-allowed"' : 'onclick="setProxyPage(' + (page + 1) + ')"') + '>' + t('proxy.page_next') + '</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderProxies(proxies, pageData) {
   let html = '';
   if (proxies.length === 0) {
     html = '<div class="empty" data-i18n="proxy.empty">' + t('proxy.empty') + '</div>';
@@ -1245,6 +1323,7 @@ function renderProxies(proxies) {
     });
 
     html += '</tbody></table>';
+    html += renderProxyPagination(pageData);
   }
 
   document.getElementById('proxy-table-wrap').innerHTML = html;
@@ -1398,44 +1477,103 @@ async function loadAll() {
 
 // ========== 订阅管理 ==========
 
+function refreshTaskLabel(task) {
+  if (!task) return '';
+  switch (task.state) {
+    case 'running':
+      return t('sub.task_running');
+    case 'validating':
+      return t('sub.task_validating');
+    case 'success':
+      return t('sub.task_success');
+    case 'failed':
+      return t('sub.task_failed');
+    default:
+      return task.state || '';
+  }
+}
+
+function refreshTaskStyle(task) {
+  if (!task) return 'background:rgba(148,163,184,.16);color:var(--fg-dim)';
+  switch (task.state) {
+    case 'running':
+    case 'validating':
+      return 'background:rgba(245,158,11,.16);color:var(--yellow)';
+    case 'success':
+      return 'background:rgba(34,197,94,.16);color:var(--green)';
+    case 'failed':
+      return 'background:rgba(239,68,68,.14);color:var(--red)';
+    default:
+      return 'background:rgba(148,163,184,.16);color:var(--fg-dim)';
+  }
+}
+
+function renderRefreshTaskBadge(task) {
+  if (!task) return '';
+  const title = escapeHtml(task.message || '');
+  let label = refreshTaskLabel(task);
+  if (task.state === 'success' && task.valid_count) {
+    label += ' ' + task.valid_count;
+  }
+  return '<span title="' + title + '" style="display:inline-block;margin-left:8px;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:700;' + refreshTaskStyle(task) + '">' + escapeHtml(label) + '</span>';
+}
+
 async function loadSubscriptions() {
-  const subs = await api('/api/subscriptions');
+  const [subs, status] = await Promise.all([
+    api('/api/subscriptions'),
+    api('/api/custom/status')
+  ]);
   const el = document.getElementById('sub-list');
   if (!el || !subs) return;
 
+  const tasks = Array.isArray(status && status.refresh_tasks) ? status.refresh_tasks : [];
+  const taskMap = {};
+  let allTask = null;
+  let activeTasks = 0;
+  tasks.forEach(task => {
+    if (task.scope === 'subscription' && task.subscription_id) {
+      taskMap[task.subscription_id] = task;
+    } else if (task.scope === 'all') {
+      allTask = task;
+    }
+    if (task.state === 'running' || task.state === 'validating') {
+      activeTasks++;
+    }
+  });
+
   if (subs.length === 0) {
     el.innerHTML = '<div style="color:var(--gray-5);text-align:center;padding:8px">' + t('sub.empty') + '</div>';
-    return;
+  } else {
+    el.innerHTML = subs.map(s => {
+      const statusColor = s.status === 'active' ? 'var(--green)' : 'var(--gray-5)';
+      const statusIcon = s.status === 'active' ? '●' : '○';
+      const active = s.active_count || 0;
+      const disabled = s.disabled_count || 0;
+      const total = active + disabled;
+      const statsText = total + ' ' + t('sub.nodes') + ' · ' + active + ' ' + t('sub.available') + (disabled > 0 ? ' · ' + disabled + ' ' + t('sub.disabled_label') : '');
+      const badge = s.contributed ? '<span style="display:inline-block;background:var(--orange);color:#000;font-size:7px;font-weight:700;padding:0 3px;margin-left:4px;vertical-align:middle">' + t('sub.contributed') + '</span>' : '';
+      const taskBadge = renderRefreshTaskBadge(taskMap[s.id]);
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">' +
+        '<div style="flex:1;min-width:0">' +
+          '<span style="color:' + statusColor + '">' + statusIcon + '</span> ' +
+          '<span style="font-weight:600">' + (s.name||t('sub.add_title')) + '</span>' + badge +
+          '<span style="color:var(--gray-5);margin-left:8px">' + statsText + '</span>' + taskBadge +
+        '</div>' +
+        '<div style="display:flex;gap:4px;flex-shrink:0">' +
+          '<button onclick="refreshSub(' + s.id + ')" style="background:none;border:1px solid var(--border);color:var(--fg-dim);cursor:pointer;padding:2px 6px;font-size:9px;font-family:var(--mono)">↻</button>' +
+          '<button onclick="toggleSub(' + s.id + ')" style="background:none;border:1px solid var(--border);color:var(--fg-dim);cursor:pointer;padding:2px 6px;font-size:9px;font-family:var(--mono)">' + (s.status === 'active' ? '⏸' : '▶') + '</button>' +
+          '<button onclick="deleteSub(' + s.id + ')" style="background:none;border:1px solid var(--red);color:var(--red);cursor:pointer;padding:2px 6px;font-size:9px;font-family:var(--mono)">✕</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
   }
 
-  el.innerHTML = subs.map(s => {
-    const statusColor = s.status === 'active' ? 'var(--green)' : 'var(--gray-5)';
-    const statusIcon = s.status === 'active' ? '●' : '○';
-    const active = s.active_count || 0;
-    const disabled = s.disabled_count || 0;
-    const total = active + disabled;
-    const statsText = total + ' ' + t('sub.nodes') + ' · ' + active + ' ' + t('sub.available') + (disabled > 0 ? ' · ' + disabled + ' ' + t('sub.disabled_label') : '');
-    const badge = s.contributed ? '<span style="display:inline-block;background:var(--orange);color:#000;font-size:7px;font-weight:700;padding:0 3px;margin-left:4px;vertical-align:middle">' + t('sub.contributed') + '</span>' : '';
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">' +
-      '<div style="flex:1;min-width:0">' +
-        '<span style="color:' + statusColor + '">' + statusIcon + '</span> ' +
-        '<span style="font-weight:600">' + (s.name||t('sub.add_title')) + '</span>' + badge +
-        '<span style="color:var(--gray-5);margin-left:8px">' + statsText + '</span>' +
-      '</div>' +
-      '<div style="display:flex;gap:4px;flex-shrink:0">' +
-        '<button onclick="refreshSub(' + s.id + ')" style="background:none;border:1px solid var(--border);color:var(--fg-dim);cursor:pointer;padding:2px 6px;font-size:9px;font-family:var(--mono)">↻</button>' +
-        '<button onclick="toggleSub(' + s.id + ')" style="background:none;border:1px solid var(--border);color:var(--fg-dim);cursor:pointer;padding:2px 6px;font-size:9px;font-family:var(--mono)">' + (s.status === 'active' ? '⏸' : '▶') + '</button>' +
-        '<button onclick="deleteSub(' + s.id + ')" style="background:none;border:1px solid var(--red);color:var(--red);cursor:pointer;padding:2px 6px;font-size:9px;font-family:var(--mono)">✕</button>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-
   // 加载状态
-  const status = await api('/api/custom/status');
   const statusEl = document.getElementById('sub-status');
   if (status && statusEl) {
     const parts = [];
     if (status.singbox_running) parts.push('sing-box ✅ ' + status.singbox_nodes + ' ' + t('sub.nodes'));
+    if (allTask) parts.push(refreshTaskLabel(allTask) + (allTask.message ? '：' + allTask.message : ''));
     statusEl.textContent = parts.length > 0 ? parts.join(' · ') : '';
   }
 
@@ -1459,6 +1597,14 @@ async function loadSubscriptions() {
     const disabledMeta = document.getElementById('custom-disabled-meta');
     if (disabledEl) disabledEl.textContent = disabled;
     if (disabledMeta) disabledMeta.textContent = disabled > 0 ? t('health.awaiting_probe') : t('health.no_disabled');
+  }
+
+  if (subTaskPollTimer) {
+    clearTimeout(subTaskPollTimer);
+    subTaskPollTimer = null;
+  }
+  if (activeTasks > 0) {
+    subTaskPollTimer = setTimeout(loadSubscriptions, 3000);
   }
 }
 

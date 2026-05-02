@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -24,13 +25,15 @@ const maxSubscriptionFetchBytes = 10 << 20 // 10 MiB
 
 // Manager 订阅管理器
 type Manager struct {
-	storage   ports.SubscriptionStore
-	validator *validator.Validator
-	singbox   *SingBoxProcess
-	config    config.Provider
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	refreshMu sync.Mutex // 防止并发刷新
+	storage      ports.SubscriptionStore
+	validator    *validator.Validator
+	singbox      *SingBoxProcess
+	config       config.Provider
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	taskMu       sync.RWMutex
+	refreshTasks map[string]domain.RefreshTaskStatus
+	refreshMu    sync.Mutex // 防止并发刷新
 }
 
 // NewManager 创建订阅管理器
@@ -41,12 +44,75 @@ func NewManager(store ports.SubscriptionStore, v *validator.Validator, cfg *conf
 	}
 
 	return &Manager{
-		storage:   store,
-		validator: v,
-		singbox:   NewSingBoxProcess(cfg.SingBoxPath, dataDir, cfg.SingBoxBasePort),
-		config:    config.GlobalProvider{},
-		stopCh:    make(chan struct{}),
+		storage:      store,
+		validator:    v,
+		singbox:      NewSingBoxProcess(cfg.SingBoxPath, dataDir, cfg.SingBoxBasePort),
+		config:       config.GlobalProvider{},
+		stopCh:       make(chan struct{}),
+		refreshTasks: make(map[string]domain.RefreshTaskStatus),
 	}
+}
+
+func subscriptionTaskKey(subID int64) string {
+	return fmt.Sprintf("subscription:%d", subID)
+}
+
+func (m *Manager) setRefreshTask(task domain.RefreshTaskStatus) {
+	if task.Key == "" {
+		return
+	}
+	task.UpdatedAt = time.Now()
+	m.taskMu.Lock()
+	m.refreshTasks[task.Key] = task
+	m.taskMu.Unlock()
+}
+
+func (m *Manager) markRefreshRunning(key string, scope string, subID int64, message string) {
+	now := time.Now()
+	m.setRefreshTask(domain.RefreshTaskStatus{
+		Key:            key,
+		SubscriptionID: subID,
+		Scope:          scope,
+		State:          "running",
+		Message:        message,
+		StartedAt:      now,
+		UpdatedAt:      now,
+	})
+}
+
+func (m *Manager) markRefreshState(key string, state string, message string, nodeCount int, validCount int) {
+	m.taskMu.Lock()
+	task := m.refreshTasks[key]
+	if task.Key == "" {
+		task.Key = key
+	}
+	task.State = state
+	task.Message = message
+	task.NodeCount = nodeCount
+	task.ValidCount = validCount
+	task.UpdatedAt = time.Now()
+	if task.StartedAt.IsZero() {
+		task.StartedAt = task.UpdatedAt
+	}
+	if state == "success" || state == "failed" {
+		task.FinishedAt = task.UpdatedAt
+	}
+	m.refreshTasks[key] = task
+	m.taskMu.Unlock()
+}
+
+func (m *Manager) snapshotRefreshTasks() []domain.RefreshTaskStatus {
+	m.taskMu.RLock()
+	defer m.taskMu.RUnlock()
+
+	tasks := make([]domain.RefreshTaskStatus, 0, len(m.refreshTasks))
+	for _, task := range m.refreshTasks {
+		tasks = append(tasks, task)
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
+	})
+	return tasks
 }
 
 // Start 启动后台循环
@@ -234,25 +300,32 @@ func (m *Manager) RefreshSubscription(subID int64) error {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 
+	taskKey := subscriptionTaskKey(subID)
+	m.markRefreshRunning(taskKey, "subscription", subID, "开始刷新订阅")
+
 	sub, err := m.storage.GetSubscription(subID)
 	if err != nil {
+		m.markRefreshState(taskKey, "failed", fmt.Sprintf("获取订阅失败: %v", err), 0, 0)
 		return fmt.Errorf("获取订阅失败: %w", err)
 	}
 
 	// 获取订阅内容
 	data, err := m.fetchSubscriptionData(sub)
 	if err != nil {
+		m.markRefreshState(taskKey, "failed", fmt.Sprintf("拉取订阅失败: %v", err), 0, 0)
 		return fmt.Errorf("拉取订阅内容失败: %w", err)
 	}
 
 	// 解析节点
 	nodes, err := Parse(data, sub.Format)
 	if err != nil {
+		m.markRefreshState(taskKey, "failed", fmt.Sprintf("解析订阅失败: %v", err), 0, 0)
 		return fmt.Errorf("解析订阅内容失败: %w", err)
 	}
 
 	if len(nodes) == 0 {
 		log.Printf("[custom] ⚠️ 订阅 [%s] 无有效节点", sub.Name)
+		m.markRefreshState(taskKey, "failed", "未解析到有效节点", 0, 0)
 		return nil
 	}
 
@@ -326,7 +399,12 @@ func (m *Manager) RefreshSubscription(subID int64) error {
 	}
 
 	// 验证新入池的代理
-	go m.validateCustomProxies(allProxies, subID)
+	if len(allProxies) == 0 {
+		m.markRefreshState(taskKey, "failed", "没有可入池节点", len(nodes), 0)
+	} else {
+		m.markRefreshState(taskKey, "validating", "节点已入池，正在验证可用性", len(nodes), 0)
+		go m.finalizeRefreshTask(taskKey, subID, len(nodes), allProxies)
+	}
 
 	// 更新订阅信息（记录实际入池的代理数）
 	m.storage.UpdateSubscriptionFetch(subID, len(allProxies))
@@ -337,20 +415,36 @@ func (m *Manager) RefreshSubscription(subID int64) error {
 
 // RefreshAll 刷新所有活跃订阅
 func (m *Manager) RefreshAll() {
+	m.markRefreshRunning("all", "all", 0, "开始批量刷新所有订阅")
 	subs, err := m.storage.GetSubscriptions()
 	if err != nil {
 		log.Printf("[custom] 获取订阅列表失败: %v", err)
+		m.markRefreshState("all", "failed", fmt.Sprintf("获取订阅列表失败: %v", err), 0, 0)
 		return
 	}
 
+	triggered := 0
+	failed := 0
 	for _, sub := range subs {
 		if sub.Status != "active" {
 			continue
 		}
 		if err := m.RefreshSubscription(sub.ID); err != nil {
 			log.Printf("[custom] ❌ 订阅 [%s] 刷新失败: %v", sub.Name, err)
+			failed++
+		} else {
+			triggered++
 		}
 	}
+	if failed > 0 && triggered == 0 {
+		m.markRefreshState("all", "failed", fmt.Sprintf("批量刷新失败: %d 个订阅刷新失败", failed), triggered, 0)
+		return
+	}
+	message := fmt.Sprintf("已触发 %d 个订阅刷新", triggered)
+	if failed > 0 {
+		message += fmt.Sprintf("，其中 %d 个失败", failed)
+	}
+	m.markRefreshState("all", "success", message, triggered, 0)
 }
 
 // collectAllTunnelNodes 收集所有订阅中需要 tunnel 的节点
@@ -533,6 +627,15 @@ func (m *Manager) validateCustomProxies(proxies []domain.Proxy, subID int64) int
 	return valid
 }
 
+func (m *Manager) finalizeRefreshTask(taskKey string, subID int64, nodeCount int, proxies []domain.Proxy) {
+	valid := m.validateCustomProxies(proxies, subID)
+	if valid > 0 {
+		m.markRefreshState(taskKey, "success", fmt.Sprintf("刷新完成，%d/%d 个节点可用", valid, len(proxies)), nodeCount, valid)
+		return
+	}
+	m.markRefreshState(taskKey, "failed", "刷新完成，但没有可用节点", nodeCount, 0)
+}
+
 // GetStatus 获取订阅管理器状态
 func (m *Manager) GetStatus() map[string]interface{} {
 	customCount, _ := m.storage.CountBySource("custom")
@@ -545,6 +648,7 @@ func (m *Manager) GetStatus() map[string]interface{} {
 		"custom_count":       customCount,
 		"disabled_count":     len(disabled),
 		"subscription_count": len(subs),
+		"refresh_tasks":      m.snapshotRefreshTasks(),
 	}
 }
 

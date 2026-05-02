@@ -56,6 +56,34 @@ type Subscription struct {
 	Contributed bool      `json:"contributed"`
 }
 
+// ProxyPage is a paginated proxy-list response for admin/read-only APIs.
+type ProxyPage struct {
+	Items       []Proxy  `json:"items"`
+	Total       int      `json:"total"`
+	Page        int      `json:"page"`
+	PageSize    int      `json:"page_size"`
+	TotalPages  int      `json:"total_pages"`
+	Protocol    string   `json:"protocol,omitempty"`
+	Country     string   `json:"country,omitempty"`
+	Countries   []string `json:"countries,omitempty"`
+	HasNext     bool     `json:"has_next"`
+	HasPrevious bool     `json:"has_previous"`
+}
+
+// RefreshTaskStatus describes the latest state of a subscription refresh workflow.
+type RefreshTaskStatus struct {
+	Key            string    `json:"key"`
+	SubscriptionID int64     `json:"subscription_id,omitempty"`
+	Scope          string    `json:"scope"`
+	State          string    `json:"state"`
+	Message        string    `json:"message,omitempty"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at,omitempty"`
+	FinishedAt     time.Time `json:"finished_at,omitempty"`
+	NodeCount      int       `json:"node_count,omitempty"`
+	ValidCount     int       `json:"valid_count,omitempty"`
+}
+
 // SourceStatus records fetch source health/circuit-breaker state.
 type SourceStatus struct {
 	ID               int64
