@@ -37,17 +37,21 @@ type Manager struct {
 }
 
 // NewManager 创建订阅管理器
-func NewManager(store ports.SubscriptionStore, v *validator.Validator, cfg *config.Config) *Manager {
+func NewManager(store ports.SubscriptionStore, v *validator.Validator, cfg *config.Config, providers ...config.Provider) *Manager {
 	dataDir := ""
 	if d := os.Getenv("DATA_DIR"); d != "" {
 		dataDir = d
+	}
+	provider := config.Provider(config.GlobalProvider{})
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
 	}
 
 	return &Manager{
 		storage:      store,
 		validator:    v,
 		singbox:      NewSingBoxProcess(cfg.SingBoxPath, dataDir, cfg.SingBoxBasePort),
-		config:       config.GlobalProvider{},
+		config:       provider,
 		stopCh:       make(chan struct{}),
 		refreshTasks: make(map[string]domain.RefreshTaskStatus),
 	}

@@ -25,11 +25,12 @@ type SOCKS5Server struct {
 
 // NewSOCKS5 creates a SOCKS5 server
 func NewSOCKS5(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port string) *SOCKS5Server {
+	provider := config.StaticProvider{Config: cfg}
 	return &SOCKS5Server{
 		cfg:      cfg,
 		mode:     mode,
 		port:     port,
-		selector: NewSelector(s),
+		selector: NewSelector(s, provider),
 		reporter: NewFailureReporter(s),
 	}
 }

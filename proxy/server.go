@@ -26,11 +26,12 @@ type Server struct {
 }
 
 func New(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port string) *Server {
+	provider := config.StaticProvider{Config: cfg}
 	return &Server{
 		cfg:      cfg,
 		mode:     mode,
 		port:     port,
-		selector: NewSelector(s),
+		selector: NewSelector(s, provider),
 		reporter: NewFailureReporter(s),
 	}
 }

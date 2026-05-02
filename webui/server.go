@@ -98,6 +98,7 @@ type FetchTrigger func()
 
 type Server struct {
 	cfg           *config.Config
+	config        config.Provider
 	poolMgr       *pool.Manager
 	proxyAdmin    *appservice.ProxyAdminService
 	sourceAdmin   *appservice.SourceAdminService
@@ -106,9 +107,14 @@ type Server struct {
 	configChanged chan<- struct{}
 }
 
-func New(cfg *config.Config, pm *pool.Manager, proxyAdmin *appservice.ProxyAdminService, sourceAdmin *appservice.SourceAdminService, subAdmin *appservice.SubscriptionAdminService, ft FetchTrigger, cc chan<- struct{}) *Server {
+func New(cfg *config.Config, pm *pool.Manager, proxyAdmin *appservice.ProxyAdminService, sourceAdmin *appservice.SourceAdminService, subAdmin *appservice.SubscriptionAdminService, ft FetchTrigger, cc chan<- struct{}, providers ...config.Provider) *Server {
+	provider := config.Provider(config.GlobalProvider{})
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
+	}
 	return &Server{
 		cfg:           cfg,
+		config:        provider,
 		poolMgr:       pm,
 		proxyAdmin:    proxyAdmin,
 		sourceAdmin:   sourceAdmin,
@@ -371,7 +377,7 @@ func (s *Server) apiSourceStats(w http.ResponseWriter, r *http.Request) {
 
 // apiConfig 获取配置
 func (s *Server) apiConfig(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	httpSlots, socks5Slots := cfg.CalculateSlots()
 
 	jsonOK(w, map[string]interface{}{
@@ -459,7 +465,7 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录旧配置
-	oldCfg := config.Get()
+	oldCfg := s.config.Get()
 	oldSize := oldCfg.PoolMaxSize
 	oldRatio := oldCfg.PoolHTTPRatio
 

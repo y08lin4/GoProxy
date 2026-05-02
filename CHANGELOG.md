@@ -28,6 +28,7 @@
 - `validator` 拆分为连通性探测与策略链，出口信息、地理过滤、状态码、响应时间和 HTTP CONNECT 检查改为可组合策略。
 - 新增 `SubscriptionAdminService`，WebUI 的订阅列表、增删改刷和状态切换逻辑继续下沉到 service 层。
 - `webui` 生产代码不再直接依赖 `storage` 包，当前仅 `main` 保留对具体存储实现的直接依赖。
+- `validator`、`webui`、`custom.Manager`、`proxy` 入口和后台配置监听改为通过 `ConfigProvider` / `StaticProvider` 获取配置，进一步收口散落的全局配置读取。
 
 ### 重构
 

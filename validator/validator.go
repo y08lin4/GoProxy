@@ -21,6 +21,7 @@ type Validator struct {
 	timeout            time.Duration
 	validateURL        string
 	maxResponseMs      int
+	configProvider     config.Provider
 	cfg                *config.Config
 	geoIP              ports.GeoIPResolver
 	strategies         []validationStrategy
@@ -38,8 +39,12 @@ func New(concurrency, timeoutSec int, validateURL string) *Validator {
 	return NewWithGeoIP(concurrency, timeoutSec, validateURL, nil)
 }
 
-func NewWithGeoIP(concurrency, timeoutSec int, validateURL string, geoIP ports.GeoIPResolver) *Validator {
-	cfg := config.Get()
+func NewWithGeoIP(concurrency, timeoutSec int, validateURL string, geoIP ports.GeoIPResolver, providers ...config.Provider) *Validator {
+	provider := config.Provider(config.GlobalProvider{})
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
+	}
+	cfg := provider.Get()
 	maxMs := 0
 	if cfg != nil {
 		maxMs = cfg.MaxResponseMs
@@ -49,6 +54,7 @@ func NewWithGeoIP(concurrency, timeoutSec int, validateURL string, geoIP ports.G
 		timeout:            time.Duration(timeoutSec) * time.Second,
 		validateURL:        validateURL,
 		maxResponseMs:      maxMs,
+		configProvider:     provider,
 		cfg:                cfg,
 		geoIP:              geoIP,
 		httpConnectChecker: checkHTTPSConnectContext,

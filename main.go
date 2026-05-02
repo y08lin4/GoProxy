@@ -32,6 +32,7 @@ func main() {
 
 	logger.Init()
 	cfg := config.Load()
+	provider := config.StaticProvider{Config: cfg}
 
 	if os.Getenv("WEBUI_PASSWORD") == "" {
 		log.Printf("[main] WebUI 使用默认密码: %s（可通过环境变量 WEBUI_PASSWORD 自定义）", config.DefaultPassword)
@@ -50,17 +51,17 @@ func main() {
 
 	geoResolver := geoip.NewResolver(cfg.IPQueryRateLimit)
 	sourceMgr := fetcher.NewSourceManager(store.GetDB())
-	fetch := fetcher.New(cfg.HTTPSourceURL, cfg.SOCKS5SourceURL, sourceMgr, cfg.MaxCandidatesPerSource)
-	validate := validator.NewWithGeoIP(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL, geoResolver)
+	fetch := fetcher.New(cfg.HTTPSourceURL, cfg.SOCKS5SourceURL, sourceMgr, cfg.MaxCandidatesPerSource, provider)
+	validate := validator.NewWithGeoIP(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL, geoResolver, provider)
 	poolMgr := pool.NewManager(store, cfg)
 	healthChecker := checker.NewHealthChecker(store, validate, cfg, poolMgr)
 	opt := optimizer.NewOptimizer(fetch, validate, poolMgr, cfg)
-	refillSvc := service.NewRefillService(fetch, validate, poolMgr)
-	customMgr := custom.NewManager(store, validate, cfg)
+	refillSvc := service.NewRefillService(fetch, validate, poolMgr, provider)
+	customMgr := custom.NewManager(store, validate, cfg, provider)
 	defer customMgr.Stop()
-	proxyAdmin := service.NewProxyAdminService(store, geoResolver)
-	sourceAdmin := service.NewSourceAdminService(fetch, sourceMgr)
-	subscriptionAdmin := service.NewSubscriptionAdminService(store, customMgr)
+	proxyAdmin := service.NewProxyAdminService(store, geoResolver, provider)
+	sourceAdmin := service.NewSourceAdminService(fetch, sourceMgr, provider)
+	subscriptionAdmin := service.NewSubscriptionAdminService(store, customMgr, provider)
 
 	totalDeleted := cleanupInvalidProxies(store, cfg)
 
@@ -72,7 +73,7 @@ func main() {
 	configChanged := make(chan struct{}, 1)
 	ui := webui.New(cfg, poolMgr, proxyAdmin, sourceAdmin, subscriptionAdmin, func() {
 		refillSvc.Run(ctx)
-	}, configChanged)
+	}, configChanged, provider)
 
 	serverErrCh := make(chan error, managedServers)
 	serverDoneCh := make(chan string, managedServers)
@@ -98,7 +99,7 @@ func main() {
 	healthChecker.StartBackground(ctx)
 	opt.StartBackground(ctx)
 	customMgr.Start(ctx)
-	go watchConfigChanges(ctx, configChanged, poolMgr)
+	go watchConfigChanges(ctx, configChanged, poolMgr, provider)
 
 	var shutdownErr error
 	select {
@@ -203,8 +204,8 @@ func startStatusMonitor(ctx context.Context, poolMgr *pool.Manager, triggerFetch
 }
 
 // watchConfigChanges 监听配置变更
-func watchConfigChanges(ctx context.Context, configChanged <-chan struct{}, poolMgr *pool.Manager) {
-	cfg := config.Get()
+func watchConfigChanges(ctx context.Context, configChanged <-chan struct{}, poolMgr *pool.Manager, provider config.Provider) {
+	cfg := provider.Get()
 	oldSize := cfg.PoolMaxSize
 	oldRatio := cfg.PoolHTTPRatio
 
@@ -214,7 +215,7 @@ func watchConfigChanges(ctx context.Context, configChanged <-chan struct{}, pool
 			log.Println("[config] 配置监听已停止")
 			return
 		case <-configChanged:
-			newCfg := config.Get()
+			newCfg := provider.Get()
 			if newCfg.PoolMaxSize != oldSize || newCfg.PoolHTTPRatio != oldRatio {
 				log.Printf("[config] 🔡 配置变更检测: 容量 %d→%d 比例 %.2f→%.2f",
 					oldSize, newCfg.PoolMaxSize, oldRatio, newCfg.PoolHTTPRatio)
