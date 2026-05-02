@@ -17,12 +17,14 @@ import (
 )
 
 type Validator struct {
-	concurrency   int
-	timeout       time.Duration
-	validateURL   string
-	maxResponseMs int
-	cfg           *config.Config
-	geoIP         ports.GeoIPResolver
+	concurrency        int
+	timeout            time.Duration
+	validateURL        string
+	maxResponseMs      int
+	cfg                *config.Config
+	geoIP              ports.GeoIPResolver
+	strategies         []validationStrategy
+	httpConnectChecker func(ctx context.Context, proxyAddr string, timeout time.Duration) bool
 }
 
 func concurrencyBuffer(total, concurrency int) int {
@@ -42,14 +44,17 @@ func NewWithGeoIP(concurrency, timeoutSec int, validateURL string, geoIP ports.G
 	if cfg != nil {
 		maxMs = cfg.MaxResponseMs
 	}
-	return &Validator{
-		concurrency:   concurrency,
-		timeout:       time.Duration(timeoutSec) * time.Second,
-		validateURL:   validateURL,
-		maxResponseMs: maxMs,
-		cfg:           cfg,
-		geoIP:         geoIP,
+	v := &Validator{
+		concurrency:        concurrency,
+		timeout:            time.Duration(timeoutSec) * time.Second,
+		validateURL:        validateURL,
+		maxResponseMs:      maxMs,
+		cfg:                cfg,
+		geoIP:              geoIP,
+		httpConnectChecker: checkHTTPSConnectContext,
 	}
+	v.strategies = v.buildValidationStrategies()
+	return v
 }
 
 type Result = domain.ValidationResult
@@ -179,6 +184,22 @@ func (v *Validator) ValidateOneContext(ctx context.Context, p domain.Proxy) (boo
 		ctx = context.Background()
 	}
 
+	state, ok := v.probeConnectivity(ctx, p)
+	if !ok {
+		return false, state.latency, state.exitIP, state.exitLocation, state.ipInfo
+	}
+	if !v.runValidationStrategies(state) {
+		return false, state.latency, state.exitIP, state.exitLocation, state.ipInfo
+	}
+	return true, state.latency, state.exitIP, state.exitLocation, state.ipInfo
+}
+
+func (v *Validator) probeConnectivity(ctx context.Context, p domain.Proxy) (*validationState, bool) {
+	state := &validationState{
+		ctx:   ctx,
+		proxy: p,
+	}
+
 	var client *http.Client
 	var err error
 
@@ -189,86 +210,28 @@ func (v *Validator) ValidateOneContext(ctx context.Context, p domain.Proxy) (boo
 		client, err = newSOCKS5Client(p.Address, v.timeout)
 	default:
 		log.Printf("unknown protocol %s for %s", p.Protocol, p.Address)
-		return false, 0, "", "", domain.IPInfo{}
+		return state, false
 	}
 
 	if err != nil {
-		return false, 0, "", "", domain.IPInfo{}
+		return state, false
 	}
+	state.client = client
 
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.validateURL, nil)
 	if err != nil {
-		return false, 0, "", "", domain.IPInfo{}
+		return state, false
 	}
 	resp, err := client.Do(req)
-	latency := time.Since(start)
+	state.latency = time.Since(start)
 	if err != nil {
-		return false, 0, "", "", domain.IPInfo{}
+		return state, false
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
-
-	// 验证状态码（200 或 204 都接受）
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return false, latency, "", "", domain.IPInfo{}
-	}
-
-	// 响应时间过滤
-	if v.maxResponseMs > 0 && latency > time.Duration(v.maxResponseMs)*time.Millisecond {
-		return false, latency, "", "", domain.IPInfo{}
-	}
-
-	// 获取出口 IP、地理位置和 IPPure 画像（仅在验证通过时）
-	select {
-	case <-ctx.Done():
-		return false, latency, "", "", domain.IPInfo{}
-	default:
-	}
-
-	if v.geoIP == nil {
-		return false, latency, "", "", domain.IPInfo{}
-	}
-	exitIP, exitLocation, ipInfo := v.geoIP.Resolve(ctx, client)
-
-	// 必须能获取到出口信息
-	if exitIP == "" || exitLocation == "" {
-		return false, latency, exitIP, exitLocation, ipInfo
-	}
-
-	// 地理过滤：白名单优先，否则走黑名单
-	if v.cfg != nil && len(exitLocation) >= 2 {
-		countryCode := exitLocation[:2]
-		if len(v.cfg.AllowedCountries) > 0 {
-			// 白名单模式：不在白名单中则拒绝
-			allowed := false
-			for _, a := range v.cfg.AllowedCountries {
-				if countryCode == a {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return false, latency, exitIP, exitLocation, ipInfo
-			}
-		} else if len(v.cfg.BlockedCountries) > 0 {
-			// 黑名单模式
-			for _, blocked := range v.cfg.BlockedCountries {
-				if countryCode == blocked {
-					return false, latency, exitIP, exitLocation, ipInfo
-				}
-			}
-		}
-	}
-
-	// HTTP 代理额外检测：必须支持 HTTPS CONNECT 隧道
-	if p.Protocol == "http" {
-		if !checkHTTPSConnectContext(ctx, p.Address, v.timeout) {
-			return false, latency, exitIP, exitLocation, ipInfo
-		}
-	}
-
-	return true, latency, exitIP, exitLocation, ipInfo
+	state.statusCode = resp.StatusCode
+	return state, true
 }
 
 func newHTTPClient(address string, timeout time.Duration) (*http.Client, error) {
