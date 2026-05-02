@@ -40,7 +40,7 @@ func main() {
 		log.Println("[main] WebUI 密码已通过环境变量 WEBUI_PASSWORD 设置")
 	}
 
-	log.Printf("[main] 🧠 智能代理池配置: 容量=%d HTTP=%.0f%% SOCKS5=%.0f%% 延迟标准=%dms",
+	log.Printf("[main] 智能代理池配置: 容量=%d HTTP=%.0f%% SOCKS5=%.0f%% 延迟阈值=%dms",
 		cfg.PoolMaxSize, cfg.PoolHTTPRatio*100, (1-cfg.PoolHTTPRatio)*100, cfg.MaxLatencyMs)
 
 	store, err := storage.New(cfg.DBPath)
@@ -86,9 +86,9 @@ func main() {
 
 	go func() {
 		if totalDeleted > 0 {
-			log.Printf("[main] 🚀 清理后立即启动补充填充...")
+			log.Printf("[main] 清理完成后立即启动补池流程...")
 		} else {
-			log.Println("[main] 🚀 启动初始化填充...")
+			log.Println("[main] 启动初始化补池流程...")
 		}
 		refillSvc.Run(ctx)
 	}()
@@ -124,24 +124,24 @@ func cleanupInvalidProxies(store *storage.Storage, cfg *config.Config) int {
 
 	if len(cfg.AllowedCountries) > 0 {
 		if deleted, err := store.DeleteNotAllowedCountries(cfg.AllowedCountries); err == nil && deleted > 0 {
-			log.Printf("[main] 🧹 已清理 %d 个非白名单免费代理（允许: %v）", deleted, cfg.AllowedCountries)
+			log.Printf("[main] 已清理 %d 个非白名单免费代理（允许国家: %v）", deleted, cfg.AllowedCountries)
 			totalDeleted += int(deleted)
 		}
 		if disabled, err := store.DisableNotAllowedCountries(cfg.AllowedCountries); err == nil && disabled > 0 {
-			log.Printf("[main] 🔒 已禁用 %d 个非白名单订阅代理", disabled)
+			log.Printf("[main] 已禁用 %d 个非白名单订阅代理", disabled)
 		}
 	} else if len(cfg.BlockedCountries) > 0 {
 		if deleted, err := store.DeleteBlockedCountries(cfg.BlockedCountries); err == nil && deleted > 0 {
-			log.Printf("[main] 🧹 已清理 %d 个屏蔽国家免费代理（屏蔽: %v）", deleted, cfg.BlockedCountries)
+			log.Printf("[main] 已清理 %d 个屏蔽国家免费代理（屏蔽国家: %v）", deleted, cfg.BlockedCountries)
 			totalDeleted += int(deleted)
 		}
 		if disabled, err := store.DisableBlockedCountries(cfg.BlockedCountries); err == nil && disabled > 0 {
-			log.Printf("[main] 🔒 已禁用 %d 个屏蔽国家订阅代理", disabled)
+			log.Printf("[main] 已禁用 %d 个屏蔽国家订阅代理", disabled)
 		}
 	}
 
 	if deleted, err := store.DeleteWithoutExitInfo(); err == nil && deleted > 0 {
-		log.Printf("[main] 🧹 已清理 %d 个无出口信息的代理", deleted)
+		log.Printf("[main] 已清理 %d 个缺少出口信息的代理", deleted)
 		totalDeleted += int(deleted)
 	}
 
@@ -175,12 +175,12 @@ func waitForServers(doneCh <-chan string) {
 	}
 }
 
-// startStatusMonitor 状态监控协程
+// startStatusMonitor 周期性检查代理池状态，并在需要时触发补池。
 func startStatusMonitor(ctx context.Context, poolMgr *pool.Manager, triggerFetch func()) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	log.Println("[monitor] 📗 状态监控器已启动（每30秒检查）")
+	log.Println("[monitor] 状态监控器已启动（每 30 秒检查一次）")
 
 	for {
 		select {
@@ -195,7 +195,7 @@ func startStatusMonitor(ctx context.Context, poolMgr *pool.Manager, triggerFetch
 
 			needFetch, mode, preferredProtocol := poolMgr.NeedsFetch(status)
 			if needFetch {
-				log.Printf("[monitor] ⚠️  检测到池子需求: 状态=%s 模式=%s 协议=%s",
+				log.Printf("[monitor] 检测到补池需求: 状态=%s 模式=%s 协议=%s",
 					status.State, mode, preferredProtocol)
 				go triggerFetch()
 			}
@@ -203,7 +203,7 @@ func startStatusMonitor(ctx context.Context, poolMgr *pool.Manager, triggerFetch
 	}
 }
 
-// watchConfigChanges 监听配置变更
+// watchConfigChanges 监听配置变更，并在池子容量或比例变化时调整池状态。
 func watchConfigChanges(ctx context.Context, configChanged <-chan struct{}, poolMgr *pool.Manager, provider config.Provider) {
 	cfg := provider.Get()
 	oldSize := cfg.PoolMaxSize
@@ -217,7 +217,7 @@ func watchConfigChanges(ctx context.Context, configChanged <-chan struct{}, pool
 		case <-configChanged:
 			newCfg := provider.Get()
 			if newCfg.PoolMaxSize != oldSize || newCfg.PoolHTTPRatio != oldRatio {
-				log.Printf("[config] 🔡 配置变更检测: 容量 %d→%d 比例 %.2f→%.2f",
+				log.Printf("[config] 检测到配置变更: 容量 %d→%d 比例 %.2f→%.2f",
 					oldSize, newCfg.PoolMaxSize, oldRatio, newCfg.PoolHTTPRatio)
 				poolMgr.AdjustForConfigChange(oldSize, oldRatio)
 				oldSize = newCfg.PoolMaxSize

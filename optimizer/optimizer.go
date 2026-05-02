@@ -12,7 +12,7 @@ import (
 	"goproxy/validator"
 )
 
-// Optimizer 优化轮换器
+// Optimizer 负责在代理池健康时做低频优化替换。
 type Optimizer struct {
 	fetcher   *fetcher.Fetcher
 	validator *validator.Validator
@@ -29,61 +29,54 @@ func NewOptimizer(f *fetcher.Fetcher, v *validator.Validator, pm *pool.Manager, 
 	}
 }
 
-// RunOnce 执行一次优化轮换
+// RunOnce 执行一次优化轮换。
 func (o *Optimizer) RunOnce() {
 	start := time.Now()
-	log.Println("[optimize] 🎯 开始优化轮换...")
+	log.Println("[optimize] 开始执行优化轮换...")
 
-	// 获取池子状态
 	status, err := o.poolMgr.GetStatus()
 	if err != nil {
-		log.Printf("[optimize] 获取状态失败: %v", err)
+		log.Printf("[optimize] 获取池状态失败: %v", err)
 		return
 	}
-
-	// 只有健康状态才执行优化
 	if status.State != "healthy" {
-		log.Printf("[optimize] 池子状态 %s，跳过优化", status.State)
+		log.Printf("[optimize] 当前池状态为 %s，跳过优化", status.State)
 		return
 	}
 
-	// 抓取新的候选代理（优化模式）
-	log.Println("[optimize] 抓取新候选代理...")
+	log.Println("[optimize] 开始抓取优化候选代理...")
 	candidates, err := o.fetcher.FetchSmart("optimize", "")
 	if err != nil {
-		log.Printf("[optimize] 抓取失败: %v", err)
+		log.Printf("[optimize] 抓取优化候选失败: %v", err)
 		return
 	}
-
 	log.Printf("[optimize] 抓取到 %d 个候选代理", len(candidates))
 
-	// 验证候选代理
-	validCandidates := []domain.Proxy{}
+	validCandidates := make([]domain.Proxy, 0, len(candidates))
 	for result := range o.validator.ValidateStream(candidates) {
-		if result.Valid {
-			latencyMs := int(result.Latency.Milliseconds())
-			// 只保留延迟在健康标准内的
-			if latencyMs <= o.cfg.MaxLatencyHealthy {
-				validCandidates = append(validCandidates, domain.Proxy{
-					Address:      result.Proxy.Address,
-					Protocol:     result.Proxy.Protocol,
-					ExitIP:       result.ExitIP,
-					ExitLocation: result.ExitLocation,
-					IPInfo:       result.IPInfo,
-					Latency:      latencyMs,
-				})
-			}
+		if !result.Valid {
+			continue
 		}
+		latencyMs := int(result.Latency.Milliseconds())
+		if latencyMs > o.cfg.MaxLatencyHealthy {
+			continue
+		}
+		validCandidates = append(validCandidates, domain.Proxy{
+			Address:      result.Proxy.Address,
+			Protocol:     result.Proxy.Protocol,
+			ExitIP:       result.ExitIP,
+			ExitLocation: result.ExitLocation,
+			IPInfo:       result.IPInfo,
+			Latency:      latencyMs,
+		})
 	}
 
-	log.Printf("[optimize] 验证通过 %d 个优质候选（延迟<%dms）", len(validCandidates), o.cfg.MaxLatencyHealthy)
-
+	log.Printf("[optimize] 验证通过 %d 个优质候选（延迟 < %dms）", len(validCandidates), o.cfg.MaxLatencyHealthy)
 	if len(validCandidates) == 0 {
-		log.Println("[optimize] 无优质候选，跳过优化")
+		log.Println("[optimize] 没有可替换候选，结束本轮优化")
 		return
 	}
 
-	// 尝试用优质候选替换延迟高的代理
 	replacedCount := 0
 	for _, candidate := range validCandidates {
 		added, reason := o.poolMgr.TryAddProxy(candidate)
@@ -92,16 +85,16 @@ func (o *Optimizer) RunOnce() {
 		}
 	}
 
-	elapsed := time.Since(start)
-	log.Printf("[optimize] ✅ 完成: 替换 %d 个代理 耗时%v", replacedCount, elapsed)
+	log.Printf("[optimize] 优化完成: 替换 %d 个代理，耗时=%v", replacedCount, time.Since(start))
 }
 
-// StartBackground 后台定时优化
+// StartBackground 后台定时执行优化。
 func (o *Optimizer) StartBackground(ctxs ...context.Context) {
 	ctx := context.Background()
 	if len(ctxs) > 0 && ctxs[0] != nil {
 		ctx = ctxs[0]
 	}
+
 	ticker := time.NewTicker(time.Duration(o.cfg.OptimizeInterval) * time.Minute)
 	go func() {
 		defer ticker.Stop()
@@ -115,5 +108,6 @@ func (o *Optimizer) StartBackground(ctxs ...context.Context) {
 			}
 		}
 	}()
+
 	log.Printf("[optimize] 优化轮换器已启动，间隔 %d 分钟", o.cfg.OptimizeInterval)
 }

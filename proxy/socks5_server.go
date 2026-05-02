@@ -14,7 +14,7 @@ import (
 	"goproxy/internal/ports"
 )
 
-// SOCKS5Server SOCKS5 协议服务器
+// SOCKS5Server 提供 SOCKS5 协议入口。
 type SOCKS5Server struct {
 	cfg      *config.Config
 	mode     string // "random" or "lowest-latency"
@@ -23,7 +23,6 @@ type SOCKS5Server struct {
 	reporter *FailureReporter
 }
 
-// NewSOCKS5 creates a SOCKS5 server
 func NewSOCKS5(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port string) *SOCKS5Server {
 	provider := config.StaticProvider{Config: cfg}
 	return &SOCKS5Server{
@@ -35,7 +34,6 @@ func NewSOCKS5(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port 
 	}
 }
 
-// Start 启动 SOCKS5 服务器
 func (s *SOCKS5Server) Start() error {
 	return s.Run(context.Background())
 }
@@ -44,15 +42,17 @@ func (s *SOCKS5Server) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
 	modeDesc := "随机轮换"
 	if s.mode == "lowest-latency" {
 		modeDesc = "最低延迟"
 	}
-	authStatus := "无认证"
+	authStatus := "无需认证"
 	if s.cfg.ProxyAuthEnabled {
-		authStatus = fmt.Sprintf("需认证 (用户: %s)", s.cfg.ProxyAuthUsername)
+		authStatus = fmt.Sprintf("需要认证（用户: %s）", s.cfg.ProxyAuthUsername)
 	}
-	log.Printf("socks5 server listening on %s [%s] [%s]", s.port, modeDesc, authStatus)
+
+	log.Printf("[socks5] SOCKS5 代理监听 %s [%s] [%s]", s.port, modeDesc, authStatus)
 
 	listener, err := net.Listen("tcp", s.port)
 	if err != nil {
@@ -77,74 +77,62 @@ func (s *SOCKS5Server) Run(ctx context.Context) error {
 	}
 }
 
-// handleConnection 处理 SOCKS5 连接
+// handleConnection 处理一个 SOCKS5 客户端连接。
 func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// SOCKS5 握手
 	if err := s.socks5Handshake(clientConn); err != nil {
-		log.Printf("[socks5] handshake failed: %v", err)
+		log.Printf("[socks5] 握手失败: %v", err)
 		return
 	}
 
-	// 读取请求
 	target, err := s.readSOCKS5Request(clientConn)
 	if err != nil {
-		log.Printf("[socks5] read request failed: %v", err)
+		log.Printf("[socks5] 读取请求失败: %v", err)
 		return
 	}
 
-	// 带重试的连接上游代理
-	// 重试机制：只使用 SOCKS5 协议的上游代理（天然支持 HTTPS）
 	tried := []string{}
-	maxRetries := s.cfg.MaxRetry + 2 // 增加重试次数以应对质量差的代理
-
+	maxRetries := s.cfg.MaxRetry + 2
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		p, err := s.selector.Select(tried, "socks5", s.mode == "lowest-latency")
 		if err != nil {
-			log.Printf("[socks5] no available socks5 upstream proxy: %v", err)
-			s.sendSOCKS5Reply(clientConn, 0x01) // General failure
+			log.Printf("[socks5] 没有可用的上游 SOCKS5 代理: %v", err)
+			s.sendSOCKS5Reply(clientConn, 0x01)
 			return
 		}
 
 		tried = append(tried, p.Address)
 
-		// 连接上游代理
 		upstreamConn, err := dialUpstreamProxy(p, target, time.Duration(s.cfg.ValidateTimeout)*time.Second)
 		if err != nil {
-			log.Printf("[socks5] dial %s via %s (%s) failed: %v, removing", target, p.Address, p.Protocol, err)
+			log.Printf("[socks5] 通过 %s 连接 %s 失败（%s）: %v", p.Address, target, p.Protocol, err)
 			s.reporter.Failure(p)
 			continue
 		}
 
-		// 发送成功响应
 		if err := s.sendSOCKS5Reply(clientConn, 0x00); err != nil {
 			upstreamConn.Close()
 			return
 		}
 
 		s.reporter.Success(p)
-		log.Printf("[socks5] %s via %s established", target, p.Address)
+		log.Printf("[socks5] %s 通过 %s 建立成功", target, p.Address)
 
-		// 双向转发数据
 		go io.Copy(upstreamConn, clientConn)
 		io.Copy(clientConn, upstreamConn)
-
-		// 转发完成，关闭连接
 		upstreamConn.Close()
 		return
 	}
 
-	// 所有重试都失败
-	s.sendSOCKS5Reply(clientConn, 0x01) // General failure
-	log.Printf("[socks5] all proxies failed for %s", target)
+	s.sendSOCKS5Reply(clientConn, 0x01)
+	log.Printf("[socks5] 所有上游代理均失败: %s", target)
 }
 
-// socks5Handshake 处理 SOCKS5 握手
+// socks5Handshake 处理 SOCKS5 握手。
 func (s *SOCKS5Server) socks5Handshake(conn net.Conn) error {
 	buf := make([]byte, 257)
 
-	// 读取客户端问候: [VER(1), NMETHODS(1), METHODS(1-255)]
 	n, err := io.ReadAtLeast(conn, buf, 2)
 	if err != nil {
 		return err
@@ -162,14 +150,11 @@ func (s *SOCKS5Server) socks5Handshake(conn net.Conn) error {
 		}
 	}
 
-	// 检查是否需要认证
 	needAuth := s.cfg.ProxyAuthEnabled
 	methods := buf[2 : 2+nmethods]
 
-	// 选择认证方式
-	var selectedMethod byte = 0xFF // No acceptable methods
+	var selectedMethod byte = 0xFF
 	if needAuth {
-		// 需要用户名/密码认证 (0x02)
 		for _, method := range methods {
 			if method == 0x02 {
 				selectedMethod = 0x02
@@ -177,7 +162,6 @@ func (s *SOCKS5Server) socks5Handshake(conn net.Conn) error {
 			}
 		}
 	} else {
-		// 无需认证 (0x00)
 		for _, method := range methods {
 			if method == 0x00 {
 				selectedMethod = 0x00
@@ -186,16 +170,13 @@ func (s *SOCKS5Server) socks5Handshake(conn net.Conn) error {
 		}
 	}
 
-	// 发送方法选择: [VER(1), METHOD(1)]
 	if _, err := conn.Write([]byte{0x05, selectedMethod}); err != nil {
 		return err
 	}
-
 	if selectedMethod == 0xFF {
 		return fmt.Errorf("no acceptable authentication method")
 	}
 
-	// 如果需要认证，进行用户名/密码认证
 	if selectedMethod == 0x02 {
 		if err := s.socks5Auth(conn); err != nil {
 			return err
@@ -205,11 +186,10 @@ func (s *SOCKS5Server) socks5Handshake(conn net.Conn) error {
 	return nil
 }
 
-// socks5Auth 处理 SOCKS5 用户名/密码认证
+// socks5Auth 处理 SOCKS5 用户名/密码认证。
 func (s *SOCKS5Server) socks5Auth(conn net.Conn) error {
 	buf := make([]byte, 513)
 
-	// 读取认证请求: [VER(1), ULEN(1), UNAME(1-255), PLEN(1), PASSWD(1-255)]
 	n, err := io.ReadAtLeast(conn, buf, 2)
 	if err != nil {
 		return err
@@ -229,7 +209,6 @@ func (s *SOCKS5Server) socks5Auth(conn net.Conn) error {
 
 	username := string(buf[2 : 2+ulen])
 
-	// 读取密码长度和密码
 	if n < 2+ulen+1 {
 		if _, err := io.ReadFull(conn, buf[n:2+ulen+1]); err != nil {
 			return err
@@ -246,26 +225,21 @@ func (s *SOCKS5Server) socks5Auth(conn net.Conn) error {
 
 	password := string(buf[2+ulen+1 : 2+ulen+1+plen])
 
-	// 验证用户名和密码
 	if username != s.cfg.ProxyAuthUsername || password != s.cfg.ProxyAuthPassword {
-		// 认证失败: [VER(1), STATUS(1)]
 		conn.Write([]byte{0x01, 0x01})
 		return fmt.Errorf("authentication failed")
 	}
 
-	// 认证成功: [VER(1), STATUS(1)]
 	if _, err := conn.Write([]byte{0x01, 0x00}); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-// readSOCKS5Request 读取 SOCKS5 请求
+// readSOCKS5Request 解析客户端的 SOCKS5 CONNECT 请求。
 func (s *SOCKS5Server) readSOCKS5Request(conn net.Conn) (string, error) {
 	buf := make([]byte, 262)
 
-	// 读取请求: [VER(1), CMD(1), RSV(1), ATYP(1), DST.ADDR(variable), DST.PORT(2)]
 	n, err := io.ReadAtLeast(conn, buf, 4)
 	if err != nil {
 		return "", err
@@ -276,8 +250,8 @@ func (s *SOCKS5Server) readSOCKS5Request(conn net.Conn) (string, error) {
 	}
 
 	cmd := buf[1]
-	if cmd != 0x01 { // 只支持 CONNECT
-		s.sendSOCKS5Reply(conn, 0x07) // Command not supported
+	if cmd != 0x01 {
+		s.sendSOCKS5Reply(conn, 0x07)
 		return "", fmt.Errorf("unsupported command: %d", cmd)
 	}
 
@@ -294,7 +268,7 @@ func (s *SOCKS5Server) readSOCKS5Request(conn net.Conn) (string, error) {
 			}
 		}
 		host = fmt.Sprintf("%d.%d.%d.%d", buf[4], buf[5], buf[6], buf[7])
-	case 0x03: // Domain name
+	case 0x03: // Domain
 		addrLen = int(buf[4])
 		if n < 4+1+addrLen+2 {
 			if _, err := io.ReadFull(conn, buf[n:4+1+addrLen+2]); err != nil {
@@ -309,36 +283,30 @@ func (s *SOCKS5Server) readSOCKS5Request(conn net.Conn) (string, error) {
 				return "", err
 			}
 		}
-		// 简化处理，直接转换
 		host = net.IP(buf[4 : 4+addrLen]).String()
 	default:
-		s.sendSOCKS5Reply(conn, 0x08) // Address type not supported
+		s.sendSOCKS5Reply(conn, 0x08)
 		return "", fmt.Errorf("unsupported address type: %d", atyp)
 	}
 
-	// 读取端口
-	portOffset := 4
+	portOffset := 4 + addrLen
 	if atyp == 0x03 {
 		portOffset = 5 + addrLen
-	} else {
-		portOffset = 4 + addrLen
 	}
 	port := binary.BigEndian.Uint16(buf[portOffset : portOffset+2])
 
 	return fmt.Sprintf("%s:%d", host, port), nil
 }
 
-// sendSOCKS5Reply 发送 SOCKS5 响应
+// sendSOCKS5Reply 向客户端返回 SOCKS5 响应。
 func (s *SOCKS5Server) sendSOCKS5Reply(conn net.Conn, rep byte) error {
-	// [VER(1), REP(1), RSV(1), ATYP(1), BND.ADDR(variable), BND.PORT(2)]
-	// 简化：使用 0.0.0.0:0
 	reply := []byte{
-		0x05,       // VER
-		rep,        // REP: 0x00=成功, 0x01=一般失败, 0x07=命令不支持, 0x08=地址类型不支持
-		0x00,       // RSV
-		0x01,       // ATYP: IPv4
-		0, 0, 0, 0, // BND.ADDR: 0.0.0.0
-		0, 0, // BND.PORT: 0
+		0x05, // VER
+		rep,  // REP
+		0x00, // RSV
+		0x01, // ATYP: IPv4
+		0, 0, 0, 0,
+		0, 0,
 	}
 	_, err := conn.Write(reply)
 	return err

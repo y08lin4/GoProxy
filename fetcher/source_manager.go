@@ -10,7 +10,7 @@ import (
 	"goproxy/internal/domain"
 )
 
-// SourceManager 代理源管理器（断路器）
+// SourceManager 负责维护抓取源的断路器和运行状态。
 type SourceManager struct {
 	db *sql.DB
 	mu sync.RWMutex
@@ -20,7 +20,7 @@ func NewSourceManager(db *sql.DB) *SourceManager {
 	return &SourceManager{db: db}
 }
 
-// CanUseSource 判断源是否可用
+// CanUseSource 判断某个源当前是否允许使用。
 func (sm *SourceManager) CanUseSource(url string) bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -32,17 +32,16 @@ func (sm *SourceManager) CanUseSource(url string) bool {
 		url,
 	).Scan(&status, &disabledUntil)
 
-	// 源不存在，默认可用
+	// 源不存在时视为可用。
 	if err != nil {
 		return true
 	}
 
-	// 检查是否被禁用且还在冷却期
 	if status == "disabled" && disabledUntil.Valid {
 		if time.Now().Before(disabledUntil.Time) {
 			return false
 		}
-		// 冷却结束，重置状态
+		// 冷却期已过，恢复为可用状态。
 		sm.db.Exec(`UPDATE source_status SET status = 'active', consecutive_fails = 0 WHERE url = ?`, url)
 		return true
 	}
@@ -50,7 +49,7 @@ func (sm *SourceManager) CanUseSource(url string) bool {
 	return status != "disabled"
 }
 
-// RecordSuccess 记录源抓取成功
+// RecordSuccess 记录一次抓取成功。
 func (sm *SourceManager) RecordSuccess(url string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -66,7 +65,7 @@ func (sm *SourceManager) RecordSuccess(url string) {
 	`, url)
 }
 
-// RecordFail 记录源抓取失败
+// RecordFail 记录一次抓取失败，并按阈值降级或禁用源。
 func (sm *SourceManager) RecordFail(url string, failThreshold, disableThreshold, cooldownMinutes int) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -89,14 +88,17 @@ func (sm *SourceManager) RecordFail(url string, failThreshold, disableThreshold,
 			`UPDATE source_status SET status = 'disabled', disabled_until = ? WHERE url = ?`,
 			disabledUntil, url,
 		)
-		log.Printf("[source] ⛔ 禁用源（连续失败%d次）: %s (冷却%d分钟)", consecutiveFails, url, cooldownMinutes)
-	} else if consecutiveFails >= failThreshold {
+		log.Printf("[source] 禁用源（连续失败 %d 次）: %s，冷却 %d 分钟", consecutiveFails, url, cooldownMinutes)
+		return
+	}
+
+	if consecutiveFails >= failThreshold {
 		sm.db.Exec(`UPDATE source_status SET status = 'degraded' WHERE url = ?`, url)
-		log.Printf("[source] ⚠️  降级源（连续失败%d次）: %s", consecutiveFails, url)
+		log.Printf("[source] 降级源（连续失败 %d 次）: %s", consecutiveFails, url)
 	}
 }
 
-// GetSourceStats merges configured source metadata with runtime source_status records.
+// GetSourceStats 将配置源和运行时 source_status 聚合成可展示状态。
 func (sm *SourceManager) GetSourceStats(catalog []domain.FetchSourceConfig, disabledURLs []string) ([]domain.SourceRuntimeStatus, error) {
 	disabled := make(map[string]struct{}, len(disabledURLs))
 	for _, url := range disabledURLs {
@@ -144,6 +146,7 @@ func (sm *SourceManager) GetSourceStats(catalog []domain.FetchSourceConfig, disa
 		if ok && row.status != "" {
 			status = row.status
 		}
+
 		attempts := row.successCount + row.failCount
 		successRate := 0.0
 		healthScore := 50

@@ -44,15 +44,18 @@ func (s *Server) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
 	modeDesc := "随机轮换"
 	if s.mode == "lowest-latency" {
 		modeDesc = "最低延迟"
 	}
-	authStatus := "无认证"
+	authStatus := "无需认证"
 	if s.cfg.ProxyAuthEnabled {
-		authStatus = fmt.Sprintf("需认证 (用户: %s)", s.cfg.ProxyAuthUsername)
+		authStatus = fmt.Sprintf("需要认证（用户: %s）", s.cfg.ProxyAuthUsername)
 	}
-	log.Printf("proxy server listening on %s [%s] [%s]", s.port, modeDesc, authStatus)
+
+	log.Printf("[proxy] HTTP 代理监听 %s [%s] [%s]", s.port, modeDesc, authStatus)
+
 	server := &http.Server{Addr: s.port, Handler: s}
 	listener, err := net.Listen("tcp", s.port)
 	if err != nil {
@@ -65,7 +68,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
-			log.Printf("[proxy] shutdown error on %s: %v", s.port, err)
+			log.Printf("[proxy] HTTP 代理关闭异常 %s: %v", s.port, err)
 		}
 	}()
 
@@ -77,30 +80,26 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 认证检查（如果启用）
-	if s.cfg.ProxyAuthEnabled {
-		if !s.checkAuth(r) {
-			w.Header().Set("Proxy-Authenticate", `Basic realm="GoProxy"`)
-			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
-			return
-		}
+	if s.cfg.ProxyAuthEnabled && !s.checkAuth(r) {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="GoProxy"`)
+		http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+		return
 	}
 
 	if r.Method == http.MethodConnect {
 		s.handleTunnel(w, r)
-	} else {
-		s.handleHTTP(w, r)
+		return
 	}
+	s.handleHTTP(w, r)
 }
 
-// checkAuth 验证代理 Basic Auth
+// checkAuth 验证 HTTP 代理 Basic Auth。
 func (s *Server) checkAuth(r *http.Request) bool {
 	auth := r.Header.Get("Proxy-Authorization")
 	if auth == "" {
 		return false
 	}
 
-	// 解析 Basic Auth
 	const prefix = "Basic "
 	if !strings.HasPrefix(auth, prefix) {
 		return false
@@ -119,17 +118,16 @@ func (s *Server) checkAuth(r *http.Request) bool {
 	username := credentials[0]
 	password := credentials[1]
 
-	// 验证用户名和密码
 	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(s.cfg.ProxyAuthUsername)) == 1
 	passwordHash := fmt.Sprintf("%x", sha256.Sum256([]byte(password)))
 	passwordMatch := subtle.ConstantTimeCompare([]byte(passwordHash), []byte(s.cfg.ProxyAuthPasswordHash)) == 1
-
 	return usernameMatch && passwordMatch
 }
 
-// handleHTTP 处理普通 HTTP 请求（带自动重试）
+// handleHTTP 处理普通 HTTP 请求，带自动重试。
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var tried []string
+
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
 		p, err := s.selector.Select(tried, "", s.mode == "lowest-latency")
 		if err != nil {
@@ -145,7 +143,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 转发请求（使用完整 URL，上游代理通过 client transport 设置）
 		req, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
 		if err != nil {
 			continue
@@ -155,13 +152,12 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("[proxy] %s via %s failed, removing", r.RequestURI, p.Address)
+			log.Printf("[proxy] %s 通过 %s 请求失败，准备切换代理", r.RequestURI, p.Address)
 			s.reporter.Failure(p)
 			continue
 		}
 		defer resp.Body.Close()
 
-		// 写回响应
 		for k, vv := range resp.Header {
 			for _, v := range vv {
 				w.Header().Add(k, v)
@@ -170,10 +166,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 		s.reporter.Success(p)
-		if resp.StatusCode == 429 {
-			log.Printf("[proxy] ⚠️  429 %s via %s (protocol=%s)", r.RequestURI, p.Address, p.Protocol)
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			log.Printf("[proxy] %s 通过 %s 返回 429（%s）", r.RequestURI, p.Address, p.Protocol)
 		} else {
-			log.Printf("[proxy] %s via %s -> %d", r.RequestURI, p.Address, resp.StatusCode)
+			log.Printf("[proxy] %s 通过 %s 返回 %d", r.RequestURI, p.Address, resp.StatusCode)
 		}
 		return
 	}
@@ -181,9 +178,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "all proxies failed", http.StatusBadGateway)
 }
 
-// handleTunnel 处理 HTTPS CONNECT 隧道（带自动重试）
+// handleTunnel 处理 HTTPS CONNECT 隧道，带自动重试。
 func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	var tried []string
+
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
 		p, err := s.selector.Select(tried, "", s.mode == "lowest-latency")
 		if err != nil {
@@ -195,14 +193,13 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 
 		conn, err := dialUpstreamProxy(p, r.Host, time.Duration(s.cfg.ValidateTimeout)*time.Second)
 		if err != nil {
-			log.Printf("[tunnel] dial %s via %s failed, removing", r.Host, p.Address)
+			log.Printf("[tunnel] 通过 %s 连接 %s 失败，准备切换代理", p.Address, r.Host)
 			s.reporter.Failure(p)
 			continue
 		}
 
 		s.reporter.Success(p)
 
-		// 告知客户端隧道建立
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
 			conn.Close()
@@ -216,9 +213,8 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Fprintf(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n")
-		log.Printf("[tunnel] %s via %s established", r.Host, p.Address)
+		log.Printf("[tunnel] %s 通过 %s 建立成功", r.Host, p.Address)
 
-		// 双向转发
 		go transfer(conn, clientConn)
 		go transfer(clientConn, conn)
 		return
