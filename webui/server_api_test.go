@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"goproxy/config"
+	"goproxy/fetcher"
 	"goproxy/internal/domain"
 	"goproxy/internal/ports"
 	appservice "goproxy/internal/service"
+	"goproxy/storage"
 )
 
 type fakeWebUIProxyAdminStore struct {
@@ -511,5 +513,96 @@ func TestAPISubscriptionDeleteRefreshToggleEndpoints(t *testing.T) {
 	}
 	if store.toggledSubscriptionID != 15 {
 		t.Fatalf("unexpected toggled subscription id: %d", store.toggledSubscriptionID)
+	}
+}
+
+func TestAPISourceStatsReflectSavedConfigAndRuntime(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("DATA_DIR", tempDir)
+
+	cfg := config.Load()
+	dbPath := filepath.Join(tempDir, "proxy.db")
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
+	defer store.Close()
+
+	sourceMgr := fetcher.NewSourceManager(store.GetDB())
+	f := fetcher.New("", "", sourceMgr, cfg.MaxCandidatesPerSource, config.GlobalProvider{})
+	sourceAdmin := appservice.NewSourceAdminService(f, sourceMgr, config.GlobalProvider{})
+	configChanged := make(chan struct{}, 1)
+	srv := New(cfg, nil, nil, sourceAdmin, nil, nil, configChanged, config.GlobalProvider{})
+
+	payload := map[string]interface{}{
+		"pool_max_size":             cfg.PoolMaxSize,
+		"pool_http_ratio":           cfg.PoolHTTPRatio,
+		"pool_min_per_protocol":     cfg.PoolMinPerProtocol,
+		"max_latency_ms":            cfg.MaxLatencyMs,
+		"max_latency_emergency":     cfg.MaxLatencyEmergency,
+		"max_latency_healthy":       cfg.MaxLatencyHealthy,
+		"validate_concurrency":      cfg.ValidateConcurrency,
+		"validate_timeout":          cfg.ValidateTimeout,
+		"health_check_interval":     cfg.HealthCheckInterval,
+		"health_check_batch_size":   cfg.HealthCheckBatchSize,
+		"optimize_interval":         cfg.OptimizeInterval,
+		"replace_threshold":         cfg.ReplaceThreshold,
+		"blocked_countries":         cfg.BlockedCountries,
+		"allowed_countries":         cfg.AllowedCountries,
+		"custom_proxy_mode":         cfg.CustomProxyMode,
+		"custom_priority":           cfg.CustomPriority,
+		"custom_free_priority":      cfg.CustomFreePriority,
+		"custom_probe_interval":     cfg.CustomProbeInterval,
+		"custom_refresh_interval":   cfg.CustomRefreshInterval,
+		"extra_sources":             []map[string]string{{"group": "slow", "protocol": "http", "url": "https://example.com/http.txt"}, {"group": "fast", "protocol": "socks5", "url": "https://example.com/socks5.txt"}},
+		"disabled_source_urls":      []string{"https://example.com/socks5.txt"},
+		"max_candidates_per_source": cfg.MaxCandidatesPerSource,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	saveReq := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewReader(data))
+	saveReq.AddCookie(adminCookie(t))
+	saveReq.Header.Set("Content-Type", "application/json")
+	saveRR := httptest.NewRecorder()
+	srv.authMiddleware(srv.apiConfigSave).ServeHTTP(saveRR, saveReq)
+	if saveRR.Code != http.StatusOK {
+		t.Fatalf("unexpected config save status: %d body=%s", saveRR.Code, saveRR.Body.String())
+	}
+
+	sourceMgr.RecordSuccess("https://example.com/http.txt")
+	sourceMgr.RecordFail("https://example.com/socks5.txt", 1, 5, 30)
+
+	statsReq := httptest.NewRequest(http.MethodGet, "/api/sources/status", nil)
+	statsRR := httptest.NewRecorder()
+	srv.apiSourceStats(statsRR, statsReq)
+	if statsRR.Code != http.StatusOK {
+		t.Fatalf("unexpected source stats status: %d", statsRR.Code)
+	}
+
+	var stats []domain.SourceRuntimeStatus
+	if err := json.NewDecoder(statsRR.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode source stats: %v", err)
+	}
+
+	var foundHTTP, foundSocks bool
+	for _, stat := range stats {
+		switch stat.URL {
+		case "https://example.com/http.txt":
+			foundHTTP = true
+			if !stat.Enabled || stat.Protocol != "http" || stat.Group != "slow" || stat.SuccessCount != 1 {
+				t.Fatalf("unexpected http source stat: %#v", stat)
+			}
+		case "https://example.com/socks5.txt":
+			foundSocks = true
+			if stat.Enabled || stat.Protocol != "socks5" || stat.Group != "fast" || stat.FailCount != 1 || stat.Status != "degraded" {
+				t.Fatalf("unexpected socks source stat: %#v", stat)
+			}
+		}
+	}
+	if !foundHTTP || !foundSocks {
+		t.Fatalf("expected both configured sources in stats, got %#v", stats)
 	}
 }
