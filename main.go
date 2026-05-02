@@ -56,8 +56,11 @@ func main() {
 	healthChecker := checker.NewHealthChecker(store, validate, cfg, poolMgr)
 	opt := optimizer.NewOptimizer(fetch, validate, poolMgr, cfg)
 	refillSvc := service.NewRefillService(fetch, validate, poolMgr)
+	customMgr := custom.NewManager(store, validate, cfg)
+	defer customMgr.Stop()
 	proxyAdmin := service.NewProxyAdminService(store, geoResolver)
 	sourceAdmin := service.NewSourceAdminService(fetch, sourceMgr)
+	subscriptionAdmin := service.NewSubscriptionAdminService(store, customMgr)
 
 	totalDeleted := cleanupInvalidProxies(store, cfg)
 
@@ -66,11 +69,8 @@ func main() {
 	socks5RandomServer := proxy.NewSOCKS5(store, cfg, "random", cfg.SOCKS5Port)
 	socks5StableServer := proxy.NewSOCKS5(store, cfg, "lowest-latency", cfg.StableSOCKS5Port)
 
-	customMgr := custom.NewManager(store, validate, cfg)
-	defer customMgr.Stop()
-
 	configChanged := make(chan struct{}, 1)
-	ui := webui.New(store, cfg, poolMgr, customMgr, geoResolver, proxyAdmin, sourceAdmin, func() {
+	ui := webui.New(cfg, poolMgr, proxyAdmin, sourceAdmin, subscriptionAdmin, func() {
 		refillSvc.Run(ctx)
 	}, configChanged)
 

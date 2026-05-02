@@ -56,6 +56,10 @@ func (s *ProxyAdminService) Stats(proxyPort string) map[string]interface{} {
 	}
 }
 
+func (s *ProxyAdminService) QualityDistribution() (map[string]int, error) {
+	return s.store.GetQualityDistribution()
+}
+
 func (s *ProxyAdminService) List(protocol string) ([]domain.Proxy, error) {
 	if protocol != "" {
 		return s.store.GetByProtocol(protocol)

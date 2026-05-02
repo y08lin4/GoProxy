@@ -56,6 +56,13 @@ type Subscription struct {
 	Contributed bool      `json:"contributed"`
 }
 
+// SubscriptionWithStats augments one subscription with current active/disabled proxy counts.
+type SubscriptionWithStats struct {
+	Subscription
+	ActiveCount   int `json:"active_count"`
+	DisabledCount int `json:"disabled_count"`
+}
+
 // ProxyPage is a paginated proxy-list response for admin/read-only APIs.
 type ProxyPage struct {
 	Items       []Proxy  `json:"items"`
