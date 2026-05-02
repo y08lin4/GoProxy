@@ -66,3 +66,22 @@ func TestLimitProxyCandidates(t *testing.T) {
 		t.Fatalf("limit 0 should keep all proxies, got %d", len(unlimited))
 	}
 }
+
+func TestBuiltInSourcesAreUniqueAndSupported(t *testing.T) {
+	seen := make(map[string]struct{}, len(allSources))
+	for _, source := range allSources {
+		if source.URL == "" {
+			t.Fatal("built-in source URL must not be empty")
+		}
+		if _, ok := seen[source.URL]; ok {
+			t.Fatalf("duplicate built-in source URL: %s", source.URL)
+		}
+		seen[source.URL] = struct{}{}
+
+		switch source.Protocol {
+		case "http", "socks5":
+		default:
+			t.Fatalf("source %s uses unsupported protocol %q", source.URL, source.Protocol)
+		}
+	}
+}

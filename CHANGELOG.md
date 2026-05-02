@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 从 Proxyfind 目录筛选并验证更多纯文本代理源，扩充 OpenProxyList、ProxySpace、Jetkai、ShiftyTR、ErcinDedeoglu 等来源。
+
 ### 重构
 
 - 计划继续拆分 `storage` 仓储边界。

@@ -39,6 +39,12 @@ var fastUpdateSources = []Source{
 	{"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5"},
 	{"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt", "http"},
 	{"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt", "socks5"},
+	// Proxyfind 参考源：OpenProxyList / ProxySpace（API/高频纯文本）
+	{"https://api.openproxylist.xyz/http.txt", "http"},
+	{"https://api.openproxylist.xyz/socks4.txt", "socks5"},
+	{"https://api.openproxylist.xyz/socks5.txt", "socks5"},
+	{"https://proxyspace.pro/http.txt", "http"},
+	{"https://proxyspace.pro/https.txt", "http"},
 }
 
 // 慢速更新源（每天更新）- 用于优化轮换模式
@@ -82,6 +88,33 @@ var slowUpdateSources = []Source{
 	{"https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/free.txt", "http"},
 	{"https://cdn.jsdelivr.net/gh/ALIILAPRO/Proxy/socks5.txt", "socks5"},
 	{"https://cdn.jsdelivr.net/gh/Zaeem20/FREE_PROXIES_LIST/socks5.txt", "socks5"},
+	// Proxyfind 补充源：Jetkai / ShiftyTR / ErcinDedeoglu
+	{"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt", "http"},
+	{"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt", "http"},
+	{"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks4.txt", "socks5"},
+	{"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt", "socks5"},
+	{"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt", "http"},
+	{"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/https.txt", "http"},
+	{"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt", "socks5"},
+	{"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt", "socks5"},
+	{"https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt", "http"},
+	{"https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/https.txt", "http"},
+	{"https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks4.txt", "socks5"},
+	{"https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks5.txt", "socks5"},
+	// Proxyfind 补充源：已有源家族缺失的协议文件
+	{"https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt", "socks5"},
+	{"https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks4.txt", "socks5"},
+	{"https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt", "socks5"},
+	{"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS4_RAW.txt", "socks5"},
+	{"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.txt", "http"},
+	{"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt", "socks5"},
+	{"https://cdn.jsdelivr.net/gh/Anonym0usWork1221/Free-Proxies/proxy_files/https_proxies.txt", "http"},
+	{"https://cdn.jsdelivr.net/gh/Zaeem20/FREE_PROXIES_LIST/https.txt", "http"},
+	// Proxyfind 补充源：其他已验证纯文本 HTTP 源
+	{"https://raw.githubusercontent.com/B4RC0DE-TM/proxy-list/main/HTTP.txt", "http"},
+	{"https://raw.githubusercontent.com/almroot/proxylist/master/list.txt", "http"},
+	{"https://raw.githubusercontent.com/aslisk/proxyhttps/main/https.txt", "http"},
+	{"https://raw.githubusercontent.com/opsxcq/proxy-list/master/list.txt", "http"},
 }
 
 // 所有源
