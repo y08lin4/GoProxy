@@ -5,20 +5,20 @@ import (
 	"time"
 
 	"goproxy/config"
+	"goproxy/internal/ports"
 	"goproxy/pool"
-	"goproxy/storage"
 	"goproxy/validator"
 )
 
 // HealthChecker 健康检查器
 type HealthChecker struct {
-	storage   *storage.Storage
+	storage   ports.HealthCheckStore
 	validator *validator.Validator
 	cfg       *config.Config
 	poolMgr   *pool.Manager
 }
 
-func NewHealthChecker(s *storage.Storage, v *validator.Validator, cfg *config.Config, pm *pool.Manager) *HealthChecker {
+func NewHealthChecker(s ports.HealthCheckStore, v *validator.Validator, cfg *config.Config, pm *pool.Manager) *HealthChecker {
 	return &HealthChecker{
 		storage:   s,
 		validator: v,
