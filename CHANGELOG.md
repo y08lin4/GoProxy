@@ -17,6 +17,8 @@
 - `proxy` 运行时改为依赖选择和使用上报存储接口，HTTP/SOCKS5 入口不再直接依赖 `storage` 包。
 - 移除订阅解析默认调试落盘，WebUI 改用仓储方法标记贡献订阅，并为单个代理刷新增加按地址查询。
 - `optimizer` 改为使用领域模型候选，不再直接依赖 `storage` 包。
+- 新增订阅管理和 WebUI 代理管理端口接口，`custom.Manager` 不再直接依赖 `storage` 包。
+- 新增 `ProxyAdminService` 与配置 Provider，WebUI 的代理统计、列表、删除和刷新逻辑开始下沉到 service 层。
 
 ### 重构
 

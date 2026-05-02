@@ -16,10 +16,10 @@ import (
 	"goproxy/config"
 	"goproxy/custom"
 	"goproxy/internal/ports"
+	appservice "goproxy/internal/service"
 	"goproxy/logger"
 	"goproxy/pool"
 	"goproxy/storage"
-	"goproxy/validator"
 )
 
 // in-memory sessions
@@ -102,7 +102,7 @@ type Server struct {
 	cfg           *config.Config
 	poolMgr       *pool.Manager
 	customMgr     *custom.Manager
-	geoIP         ports.GeoIPResolver
+	proxyAdmin    *appservice.ProxyAdminService
 	fetchTrigger  FetchTrigger
 	configChanged chan<- struct{}
 }
@@ -113,7 +113,7 @@ func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Ma
 		cfg:           cfg,
 		poolMgr:       pm,
 		customMgr:     cm,
-		geoIP:         geoIP,
+		proxyAdmin:    appservice.NewProxyAdminService(s, geoIP),
 		fetchTrigger:  ft,
 		configChanged: cc,
 	}
@@ -243,28 +243,12 @@ func (s *Server) apiAuthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
-	total, _ := s.storage.Count()
-	httpCount, _ := s.storage.CountByProtocol("http")
-	socks5Count, _ := s.storage.CountByProtocol("socks5")
-	customCount, _ := s.storage.CountBySource("custom")
-	jsonOK(w, map[string]interface{}{
-		"total":        total,
-		"http":         httpCount,
-		"socks5":       socks5Count,
-		"custom_count": customCount,
-		"port":         s.cfg.ProxyPort,
-	})
+	jsonOK(w, s.proxyAdmin.Stats(s.cfg.ProxyPort))
 }
 
 func (s *Server) apiProxies(w http.ResponseWriter, r *http.Request) {
 	protocol := r.URL.Query().Get("protocol")
-	var proxies []storage.Proxy
-	var err error
-	if protocol != "" {
-		proxies, err = s.storage.GetByProtocol(protocol)
-	} else {
-		proxies, err = s.storage.GetAll()
-	}
+	proxies, err := s.proxyAdmin.List(protocol)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -284,7 +268,7 @@ func (s *Server) apiDeleteProxy(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	s.storage.Delete(req.Address)
+	_ = s.proxyAdmin.Delete(req.Address)
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
@@ -300,37 +284,7 @@ func (s *Server) apiRefreshProxy(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-
-	// 从数据库获取代理信息
-	targetProxy, err := s.storage.GetProxyByAddress(req.Address)
-	if err != nil {
-		jsonError(w, "proxy not found", http.StatusNotFound)
-		return
-	}
-
-	// 异步验证并更新
-	go func() {
-		cfg := config.Get()
-		v := validator.NewWithGeoIP(1, cfg.ValidateTimeout, cfg.ValidateURL, s.geoIP)
-
-		log.Printf("[webui] refreshing proxy: %s", req.Address)
-		valid, latency, exitIP, exitLocation, ipInfo := v.ValidateOne(*targetProxy)
-
-		if valid {
-			latencyMs := int(latency.Milliseconds())
-			s.storage.UpdateExitInfo(req.Address, exitIP, exitLocation, latencyMs, ipInfo)
-			log.Printf("[webui] proxy refreshed: %s latency=%dms grade=%s", req.Address, latencyMs, storage.CalculateQualityGrade(latencyMs))
-		} else {
-			if targetProxy.Source == "custom" {
-				s.storage.DisableProxy(req.Address)
-				log.Printf("[webui] custom proxy validation failed, disabled: %s", req.Address)
-			} else {
-				s.storage.Delete(req.Address)
-				log.Printf("[webui] proxy validation failed, removed: %s", req.Address)
-			}
-		}
-	}()
-
+	s.proxyAdmin.RefreshProxyAsync(req.Address)
 	jsonOK(w, map[string]string{"status": "refresh started"})
 }
 
@@ -348,38 +302,7 @@ func (s *Server) apiRefreshLatency(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	go func() {
-		log.Println("[webui] refreshing latency for all proxies...")
-		proxies, err := s.storage.GetAll()
-		if err != nil {
-			log.Printf("[webui] get proxies error: %v", err)
-			return
-		}
-		if len(proxies) == 0 {
-			log.Println("[webui] no proxies to refresh")
-			return
-		}
-
-		cfg := config.Get()
-		validate := validator.NewWithGeoIP(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL, s.geoIP)
-
-		log.Printf("[webui] refreshing latency for %d proxies...", len(proxies))
-		updated := 0
-		for r := range validate.ValidateStream(proxies) {
-			if r.Valid {
-				latencyMs := int(r.Latency.Milliseconds())
-				s.storage.UpdateExitInfo(r.Proxy.Address, r.ExitIP, r.ExitLocation, latencyMs, r.IPInfo)
-				updated++
-			} else {
-				if r.Proxy.Source == "custom" {
-					s.storage.DisableProxy(r.Proxy.Address)
-				} else {
-					s.storage.Delete(r.Proxy.Address)
-				}
-			}
-		}
-		log.Printf("[webui] latency refresh done: updated=%d", updated)
-	}()
+	s.proxyAdmin.RefreshLatencyAsync()
 	jsonOK(w, map[string]string{"status": "refresh started"})
 }
 

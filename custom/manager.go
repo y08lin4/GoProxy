@@ -14,7 +14,8 @@ import (
 
 	"golang.org/x/net/proxy"
 	"goproxy/config"
-	"goproxy/storage"
+	"goproxy/internal/domain"
+	"goproxy/internal/ports"
 	"goproxy/validator"
 )
 
@@ -22,15 +23,16 @@ const maxSubscriptionFetchBytes = 10 << 20 // 10 MiB
 
 // Manager 订阅管理器
 type Manager struct {
-	storage   *storage.Storage
+	storage   ports.SubscriptionStore
 	validator *validator.Validator
 	singbox   *SingBoxProcess
+	config    config.Provider
 	stopCh    chan struct{}
 	refreshMu sync.Mutex // 防止并发刷新
 }
 
 // NewManager 创建订阅管理器
-func NewManager(store *storage.Storage, v *validator.Validator, cfg *config.Config) *Manager {
+func NewManager(store ports.SubscriptionStore, v *validator.Validator, cfg *config.Config) *Manager {
 	dataDir := ""
 	if d := os.Getenv("DATA_DIR"); d != "" {
 		dataDir = d
@@ -40,6 +42,7 @@ func NewManager(store *storage.Storage, v *validator.Validator, cfg *config.Conf
 		storage:   store,
 		validator: v,
 		singbox:   NewSingBoxProcess(cfg.SingBoxPath, dataDir, cfg.SingBoxBasePort),
+		config:    config.GlobalProvider{},
 		stopCh:    make(chan struct{}),
 	}
 }
@@ -153,7 +156,7 @@ func (m *Manager) probeLoop() {
 	time.Sleep(5 * time.Second)
 
 	for {
-		cfg := config.Get()
+		cfg := m.config.Get()
 		interval := time.Duration(cfg.CustomProbeInterval) * time.Minute
 		if interval < time.Minute {
 			interval = 10 * time.Minute
@@ -177,7 +180,7 @@ func (m *Manager) probeDisabled() {
 
 	log.Printf("[custom] 🔍 探测 %d 个禁用的订阅代理", len(disabled))
 
-	cfg := config.Get()
+	cfg := m.config.Get()
 	recovered := 0
 	recoveredSubs := make(map[int64]bool)
 	for _, proxy := range disabled {
@@ -255,14 +258,14 @@ func (m *Manager) RefreshSubscription(subID int64) error {
 	}
 
 	// 收集所有入池的代理（带正确的协议信息）
-	var allProxies []storage.Proxy
+	var allProxies []domain.Proxy
 
 	// 处理可直接使用的 HTTP/SOCKS5 节点
 	for _, node := range directNodes {
 		addr := node.DirectAddress()
 		proto := node.DirectProtocol()
 		m.storage.AddProxyWithSource(addr, proto, "custom", subID)
-		allProxies = append(allProxies, storage.Proxy{Address: addr, Protocol: proto, Source: "custom"})
+		allProxies = append(allProxies, domain.Proxy{Address: addr, Protocol: proto, Source: "custom"})
 	}
 	if len(directNodes) > 0 {
 		log.Printf("[custom] 📥 %d 个 HTTP/SOCKS5 节点直接入池", len(directNodes))
@@ -297,7 +300,7 @@ func (m *Manager) RefreshSubscription(subID int64) error {
 				if port, ok := portMap[key]; ok {
 					addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 					m.storage.AddProxyWithSource(addr, "socks5", "custom", subID)
-					allProxies = append(allProxies, storage.Proxy{Address: addr, Protocol: "socks5", Source: "custom"})
+					allProxies = append(allProxies, domain.Proxy{Address: addr, Protocol: "socks5", Source: "custom"})
 				}
 			}
 			log.Printf("[custom] 📥 %d 个加密节点通过 sing-box 转换入池", len(tunnelNodes))
@@ -362,7 +365,7 @@ func (m *Manager) collectAllTunnelNodes() ([]ParsedNode, error) {
 }
 
 // fetchSubscriptionData 获取订阅数据
-func (m *Manager) fetchSubscriptionData(sub *storage.Subscription) ([]byte, error) {
+func (m *Manager) fetchSubscriptionData(sub *domain.Subscription) ([]byte, error) {
 	// 优先使用本地文件
 	if sub.FilePath != "" {
 		data, err := os.ReadFile(sub.FilePath)
@@ -412,7 +415,7 @@ func (m *Manager) fetchWithRetry(urlStr string) ([]byte, error) {
 }
 
 // fetchURL 通过指定代理（或直连）拉取 URL 内容
-func (m *Manager) fetchURL(urlStr string, p *storage.Proxy) ([]byte, error) {
+func (m *Manager) fetchURL(urlStr string, p *domain.Proxy) ([]byte, error) {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return nil, err
@@ -475,14 +478,14 @@ func readSubscriptionResponse(r io.Reader) ([]byte, error) {
 }
 
 // validateCustomProxies 验证订阅代理，返回可用数
-func (m *Manager) validateCustomProxies(proxies []storage.Proxy, subID int64) int {
+func (m *Manager) validateCustomProxies(proxies []domain.Proxy, subID int64) int {
 	if len(proxies) == 0 {
 		return 0
 	}
 
 	log.Printf("[custom] 🔍 开始验证 %d 个订阅代理", len(proxies))
 
-	cfg := config.Get()
+	cfg := m.config.Get()
 	resultCh := m.validator.ValidateStream(proxies)
 	valid, invalid := 0, 0
 	for result := range resultCh {

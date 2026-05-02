@@ -9,20 +9,22 @@ import (
 // Selector 负责按当前配置和协议要求选择上游代理。
 type Selector struct {
 	storage ports.ProxySelectionStore
+	config  config.Provider
 }
 
-func NewSelector(s ports.ProxySelectionStore) *Selector {
-	return &Selector{storage: s}
+func NewSelector(s ports.ProxySelectionStore, providers ...config.Provider) *Selector {
+	provider := config.Provider(config.GlobalProvider{})
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
+	}
+	return &Selector{storage: s, config: provider}
 }
 
 // Select 根据使用模式和选择策略获取代理。
 //
 // protocol 为空时不限制协议；传入 "socks5" 时只选择 SOCKS5 上游。
 func (s *Selector) Select(tried []string, protocol string, lowestLatency bool) (*domain.Proxy, error) {
-	cfg := config.Get()
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
+	cfg := s.config.Get()
 
 	sourceFilter := sourceFilterFromMode(cfg.CustomProxyMode)
 

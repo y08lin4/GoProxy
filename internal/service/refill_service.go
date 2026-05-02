@@ -21,14 +21,20 @@ type RefillService struct {
 	validator ports.ProxyValidator
 	pool      ports.PoolManager
 
+	config  config.Provider
 	running atomic.Bool
 }
 
-func NewRefillService(fetch ports.SmartFetcher, validate ports.ProxyValidator, poolMgr ports.PoolManager) *RefillService {
+func NewRefillService(fetch ports.SmartFetcher, validate ports.ProxyValidator, poolMgr ports.PoolManager, providers ...config.Provider) *RefillService {
+	provider := config.Provider(config.GlobalProvider{})
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
+	}
 	return &RefillService{
 		fetcher:   fetch,
 		validator: validate,
 		pool:      poolMgr,
+		config:    provider,
 	}
 }
 
@@ -50,7 +56,7 @@ func (s *RefillService) Run(ctx context.Context) {
 		return
 	}
 
-	cfg := config.Get()
+	cfg := s.config.Get()
 	log.Printf("[refill] 池子状态: %s | HTTP=%d/%d SOCKS5=%d/%d 总计=%d/%d",
 		status.State, status.HTTP, status.HTTPSlots, status.SOCKS5, status.SOCKS5Slots,
 		status.Total, cfg.PoolMaxSize)
@@ -90,7 +96,7 @@ func (s *RefillService) Run(ctx context.Context) {
 		validCount.Add(1)
 		latencyMs := int(result.Latency.Milliseconds())
 
-		cfg := config.Get()
+		cfg := s.config.Get()
 		maxLatency := cfg.GetLatencyThreshold(status.State)
 
 		if result.ExitIP == "" || result.ExitLocation == "" {
