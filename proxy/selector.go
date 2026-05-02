@@ -2,22 +2,23 @@ package proxy
 
 import (
 	"goproxy/config"
-	"goproxy/storage"
+	"goproxy/internal/domain"
+	"goproxy/internal/ports"
 )
 
 // Selector 负责按当前配置和协议要求选择上游代理。
 type Selector struct {
-	storage *storage.Storage
+	storage ports.ProxySelectionStore
 }
 
-func NewSelector(s *storage.Storage) *Selector {
+func NewSelector(s ports.ProxySelectionStore) *Selector {
 	return &Selector{storage: s}
 }
 
 // Select 根据使用模式和选择策略获取代理。
 //
 // protocol 为空时不限制协议；传入 "socks5" 时只选择 SOCKS5 上游。
-func (s *Selector) Select(tried []string, protocol string, lowestLatency bool) (*storage.Proxy, error) {
+func (s *Selector) Select(tried []string, protocol string, lowestLatency bool) (*domain.Proxy, error) {
 	cfg := config.Get()
 	if cfg == nil {
 		cfg = config.DefaultConfig()
@@ -40,7 +41,7 @@ func (s *Selector) Select(tried []string, protocol string, lowestLatency bool) (
 	return s.selectFiltered(tried, protocol, lowestLatency, sourceFilter)
 }
 
-func (s *Selector) selectFiltered(tried []string, protocol string, lowestLatency bool, sourceFilter string) (*storage.Proxy, error) {
+func (s *Selector) selectFiltered(tried []string, protocol string, lowestLatency bool, sourceFilter string) (*domain.Proxy, error) {
 	if protocol != "" {
 		if lowestLatency {
 			return s.storage.GetLowestLatencyByProtocolExcludeFiltered(protocol, tried, sourceFilter)

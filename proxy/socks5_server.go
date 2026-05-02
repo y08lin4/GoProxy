@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"goproxy/config"
-	"goproxy/storage"
+	"goproxy/internal/ports"
 )
 
 // SOCKS5Server SOCKS5 协议服务器
@@ -22,7 +22,7 @@ type SOCKS5Server struct {
 }
 
 // NewSOCKS5 creates a SOCKS5 server
-func NewSOCKS5(s *storage.Storage, cfg *config.Config, mode string, port string) *SOCKS5Server {
+func NewSOCKS5(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port string) *SOCKS5Server {
 	return &SOCKS5Server{
 		cfg:      cfg,
 		mode:     mode,

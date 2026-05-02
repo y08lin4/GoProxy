@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"time"
 
-	"goproxy/storage"
+	"goproxy/internal/domain"
 )
 
 // dialUpstreamProxy establishes a TCP tunnel to target through an upstream proxy.
-func dialUpstreamProxy(p *storage.Proxy, target string, timeout time.Duration) (net.Conn, error) {
+func dialUpstreamProxy(p *domain.Proxy, target string, timeout time.Duration) (net.Conn, error) {
 	switch p.Protocol {
 	case "http":
 		return dialHTTPConnectProxy(p.Address, target, timeout)
@@ -28,7 +28,7 @@ func dialUpstreamProxy(p *storage.Proxy, target string, timeout time.Duration) (
 }
 
 // buildUpstreamHTTPClient builds an HTTP client that sends requests through p.
-func buildUpstreamHTTPClient(p *storage.Proxy, timeout time.Duration) (*http.Client, error) {
+func buildUpstreamHTTPClient(p *domain.Proxy, timeout time.Duration) (*http.Client, error) {
 	switch p.Protocol {
 	case "http":
 		proxyURL, err := url.Parse(fmt.Sprintf("http://%s", p.Address))

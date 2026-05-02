@@ -14,6 +14,7 @@
 - `fetcher` 和 `validator` 的公开输入输出改为使用 `internal/domain` 类型，减少对 `storage` 具体实现的依赖。
 - `pool.Manager` 改为依赖代理池存储接口，不再直接依赖 `*storage.Storage`。
 - `HealthChecker` 改为依赖健康检查存储接口，并移除未使用的旧版 `checker.Checker` 实现。
+- `proxy` 运行时改为依赖选择和使用上报存储接口，HTTP/SOCKS5 入口不再直接依赖 `storage` 包。
 
 ### 重构
 

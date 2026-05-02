@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"goproxy/config"
-	"goproxy/storage"
+	"goproxy/internal/ports"
 )
 
 type Server struct {
@@ -23,7 +23,7 @@ type Server struct {
 	reporter *FailureReporter
 }
 
-func New(s *storage.Storage, cfg *config.Config, mode string, port string) *Server {
+func New(s ports.ProxyRuntimeStore, cfg *config.Config, mode string, port string) *Server {
 	return &Server{
 		cfg:      cfg,
 		mode:     mode,
