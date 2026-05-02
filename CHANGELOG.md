@@ -36,6 +36,10 @@
 - 计划将 WebUI handler 的业务逻辑下沉到 service 层。
 - 计划抽象上游拨号器，进一步简化 `proxy` 协议入口。
 
+### 测试
+
+- 新增 `ProxyAdminService`、`SubscriptionAdminService`、`SourceAdminService` 单元测试，覆盖分页、订阅编排、贡献标记、刷新触发和源状态聚合逻辑。
+
 ## [refactor/decouple-core] - 2026-05-02
 
 ### 新增
