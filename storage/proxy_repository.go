@@ -122,6 +122,26 @@ func (s *Storage) GetAll() ([]Proxy, error) {
 	return s.GetAllFiltered("")
 }
 
+// GetProxyByAddress fetches a single proxy by address.
+func (s *Storage) GetProxyByAddress(address string) (*Proxy, error) {
+	rows, err := s.db.Query(
+		`SELECT `+proxyColumns+`
+		 FROM proxies
+		 WHERE address = ?
+		 LIMIT 1`,
+		address,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		return scanProxy(rows)
+	}
+	return nil, fmt.Errorf("proxy %s not found", address)
+}
+
 // GetAllFiltered 获取可用代理（可按来源过滤）
 // sourceFilter: "" = 全部, "free" = 仅免费, "custom" = 仅订阅
 func (s *Storage) GetAllFiltered(sourceFilter string) ([]Proxy, error) {

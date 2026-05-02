@@ -68,6 +68,12 @@ func (s *Storage) AddContributedSubscription(name, url string, refreshMin int) (
 	return res.LastInsertId()
 }
 
+// MarkSubscriptionContributed marks an existing subscription as visitor-contributed.
+func (s *Storage) MarkSubscriptionContributed(id int64) error {
+	_, err := s.db.Exec(`UPDATE subscriptions SET contributed = 1 WHERE id = ?`, id)
+	return err
+}
+
 // UpdateSubscription 更新订阅
 func (s *Storage) UpdateSubscription(id int64, name, url, filePath, format string, refreshMin int) error {
 	_, err := s.db.Exec(

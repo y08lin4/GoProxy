@@ -15,6 +15,8 @@
 - `pool.Manager` 改为依赖代理池存储接口，不再直接依赖 `*storage.Storage`。
 - `HealthChecker` 改为依赖健康检查存储接口，并移除未使用的旧版 `checker.Checker` 实现。
 - `proxy` 运行时改为依赖选择和使用上报存储接口，HTTP/SOCKS5 入口不再直接依赖 `storage` 包。
+- 移除订阅解析默认调试落盘，WebUI 改用仓储方法标记贡献订阅，并为单个代理刷新增加按地址查询。
+- `optimizer` 改为使用领域模型候选，不再直接依赖 `storage` 包。
 
 ### 重构
 

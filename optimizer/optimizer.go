@@ -6,23 +6,21 @@ import (
 
 	"goproxy/config"
 	"goproxy/fetcher"
+	"goproxy/internal/domain"
 	"goproxy/pool"
-	"goproxy/storage"
 	"goproxy/validator"
 )
 
 // Optimizer 优化轮换器
 type Optimizer struct {
-	storage   *storage.Storage
 	fetcher   *fetcher.Fetcher
 	validator *validator.Validator
 	poolMgr   *pool.Manager
 	cfg       *config.Config
 }
 
-func NewOptimizer(s *storage.Storage, f *fetcher.Fetcher, v *validator.Validator, pm *pool.Manager, cfg *config.Config) *Optimizer {
+func NewOptimizer(f *fetcher.Fetcher, v *validator.Validator, pm *pool.Manager, cfg *config.Config) *Optimizer {
 	return &Optimizer{
-		storage:   s,
 		fetcher:   f,
 		validator: v,
 		poolMgr:   pm,
@@ -59,13 +57,13 @@ func (o *Optimizer) RunOnce() {
 	log.Printf("[optimize] 抓取到 %d 个候选代理", len(candidates))
 
 	// 验证候选代理
-	validCandidates := []storage.Proxy{}
+	validCandidates := []domain.Proxy{}
 	for result := range o.validator.ValidateStream(candidates) {
 		if result.Valid {
 			latencyMs := int(result.Latency.Milliseconds())
 			// 只保留延迟在健康标准内的
 			if latencyMs <= o.cfg.MaxLatencyHealthy {
-				validCandidates = append(validCandidates, storage.Proxy{
+				validCandidates = append(validCandidates, domain.Proxy{
 					Address:      result.Proxy.Address,
 					Protocol:     result.Proxy.Protocol,
 					ExitIP:       result.ExitIP,

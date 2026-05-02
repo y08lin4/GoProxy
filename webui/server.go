@@ -302,21 +302,8 @@ func (s *Server) apiRefreshProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 从数据库获取代理信息
-	proxies, err := s.storage.GetAll()
+	targetProxy, err := s.storage.GetProxyByAddress(req.Address)
 	if err != nil {
-		jsonError(w, "failed to get proxy", http.StatusInternalServerError)
-		return
-	}
-
-	var targetProxy *storage.Proxy
-	for i := range proxies {
-		if proxies[i].Address == req.Address {
-			targetProxy = &proxies[i]
-			break
-		}
-	}
-
-	if targetProxy == nil {
 		jsonError(w, "proxy not found", http.StatusNotFound)
 		return
 	}
@@ -683,7 +670,7 @@ func (s *Server) apiSubscriptionContribute(w http.ResponseWriter, r *http.Reques
 		id, err = s.storage.AddSubscription(req.Name, "", filePath, "auto", refreshMin)
 		if err == nil {
 			// 标记为贡献
-			s.storage.GetDB().Exec(`UPDATE subscriptions SET contributed = 1 WHERE id = ?`, id)
+			err = s.storage.MarkSubscriptionContributed(id)
 		}
 	}
 	if err != nil {

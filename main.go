@@ -54,7 +54,7 @@ func main() {
 	validate := validator.NewWithGeoIP(cfg.ValidateConcurrency, cfg.ValidateTimeout, cfg.ValidateURL, geoResolver)
 	poolMgr := pool.NewManager(store, cfg)
 	healthChecker := checker.NewHealthChecker(store, validate, cfg, poolMgr)
-	opt := optimizer.NewOptimizer(store, fetch, validate, poolMgr, cfg)
+	opt := optimizer.NewOptimizer(fetch, validate, poolMgr, cfg)
 	refillSvc := service.NewRefillService(fetch, validate, poolMgr)
 
 	// 清理无效代理（免费代理删除，订阅代理禁用）
